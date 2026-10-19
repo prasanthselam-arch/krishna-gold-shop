@@ -33,6 +33,7 @@ The server runs in the background, so the terminal stays free.
 Logs are written to `logs/server.log`.
 
 First sign-in: `owner` / `KrishnaGold@123`. You will be asked to set a new password.
+Forgot it? Run `./run.sh reset-password`.
 
 ## Daily use
 

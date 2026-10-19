@@ -11,6 +11,7 @@
 #   ./run.sh backup         take a database backup now
 #   ./run.sh check          check required software (requirements.txt)
 #   ./run.sh setup          install missing software and packages (--dry-run to preview)
+#   ./run.sh reset-password set a new login password (default user: owner)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -190,8 +191,18 @@ backup() {
   ok "Backup saved: $file"
 }
 
+reset_password() {
+  local user=${1:-owner} p1 p2
+  [ -t 0 ] || die "Run this in a terminal so the password can be typed."
+  read -rsp "New password for '$user' (min 8 characters): " p1; echo
+  read -rsp "Type it again: " p2; echo
+  [ "$p1" = "$p2" ] || die "Passwords do not match."
+  RESET_USER=$user RESET_PASSWORD=$p1 node_modules/.bin/tsx scripts/reset-password.ts >/dev/null || die "Password not changed."
+  ok "Password changed for '$user'. Sign in at $(app_url)"
+}
+
 usage() {
-  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-help}" in
@@ -204,6 +215,7 @@ case "${1:-help}" in
   backup)  backup ;;
   check)   ensure_requirements check ;;
   setup)   [ "${2:-}" = "--dry-run" ] && DRY_RUN=1; ensure_requirements install; [ "$DRY_RUN" = 1 ] || { [ -f .env ] || cp .env.example .env; } ;;
+  reset-password) reset_password "${2:-}" ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;
 esac
