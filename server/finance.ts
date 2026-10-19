@@ -1,7 +1,8 @@
 import { db, getSetting } from "./db.ts";
-import { todayYmd } from "./dates.ts";
+import { istYmd, todayYmd } from "./dates.ts";
 import {
-  calculateInterest,
+  runLedger,
+  timeInMonths,
   type InterestType,
   type PartialMonthPolicy,
   type RatePeriod,
@@ -19,6 +20,7 @@ export type PledgeRow = {
   interest_rate: number;
   rate_period: RatePeriod;
   interest_type: InterestType;
+  partial_month_policy: PartialMonthPolicy | null;
   notes: string;
   status: "ACTIVE" | "RELEASED";
   released_at: string | null;
@@ -46,10 +48,27 @@ export type PaymentRow = {
   notes: string;
 };
 
+export type PhotoKind = "customer" | "jewel" | "release_customer" | "release_jewel";
+
+export type PhotoRow = {
+  id: number;
+  pledge_id: number;
+  kind: PhotoKind;
+  file: string;
+  created_at: string;
+};
+
+function asPolicy(v: string | null | undefined): PartialMonthPolicy | null {
+  return v === "thirty_day_month" || v === "round_up_month" || v === "actual_days" ? v : null;
+}
+
+/** Shop-wide policy applied to newly created pledges. */
 export function policy(): PartialMonthPolicy {
-  const v = getSetting("partial_month_policy") as PartialMonthPolicy;
-  if (v === "thirty_day_month" || v === "round_up_month" || v === "actual_days") return v;
-  return "actual_days";
+  return asPolicy(getSetting("partial_month_policy")) ?? "actual_days";
+}
+
+export function pledgePolicy(pledge: PledgeRow): PartialMonthPolicy {
+  return asPolicy(pledge.partial_month_policy) ?? policy();
 }
 
 function money(n: number): number {
@@ -66,40 +85,66 @@ export function paymentsFor(pledgeId: number): PaymentRow[] {
     .all(pledgeId) as PaymentRow[];
 }
 
+export function photosFor(pledgeId: number): Omit<PhotoRow, "file" | "pledge_id">[] {
+  return db
+    .prepare("SELECT id, kind, created_at FROM photos WHERE pledge_id = ? ORDER BY id")
+    .all(pledgeId) as Omit<PhotoRow, "file" | "pledge_id">[];
+}
+
+/** Interest stops at the release date for released pledges. */
+function effectiveAsOf(pledge: PledgeRow, asOf: string): string {
+  if (pledge.status === "RELEASED" && pledge.released_at) {
+    const released = istYmd(pledge.released_at);
+    return released < asOf ? released : asOf;
+  }
+  return asOf;
+}
+
 export function settle(pledge: PledgeRow, asOf = todayYmd()) {
-  const calc = calculateInterest({
-    principal: pledge.principal,
-    ratePercent: pledge.interest_rate,
-    ratePeriod: pledge.rate_period,
-    interestType: pledge.interest_type,
-    startDate: pledge.pledge_date,
-    endDate: asOf,
-    partialMonthPolicy: policy(),
-  });
-
+  const until = effectiveAsOf(pledge, asOf);
+  const pol = pledgePolicy(pledge);
   const pays = paymentsFor(pledge.id);
+  const ledger = runLedger(
+    {
+      principal: pledge.principal,
+      ratePercent: pledge.interest_rate,
+      ratePeriod: pledge.rate_period,
+      interestType: pledge.interest_type,
+      startDate: pledge.pledge_date,
+      partialMonthPolicy: pol,
+    },
+    pays.map((p) => ({ date: istYmd(p.received_at), amount: p.amount })),
+    until,
+  );
+  const elapsed = timeInMonths(pledge.pledge_date, until, pol);
   const totalPaid = money(pays.reduce((s, p) => s + p.amount, 0));
-  const interestPaid = money(pays.reduce((s, p) => s + p.interest_portion, 0));
-  const principalPaid = money(pays.reduce((s, p) => s + p.principal_portion, 0));
-
-  const unpaidInterest = money(Math.max(0, calc.interest - interestPaid));
-  const outstandingPrincipal = money(Math.max(0, pledge.principal - principalPaid));
-  const outstanding = money(outstandingPrincipal + unpaidInterest);
-  const settled = outstanding <= 0.009;
 
   return {
-    calc,
+    asOf: until,
+    policy: pol,
+    calc: {
+      days: elapsed.days,
+      completedMonths: elapsed.completedMonths,
+      remainingDays: elapsed.remainingDays,
+      interest: ledger.interestCharged,
+      totalPayable: money(pledge.principal + ledger.interestCharged),
+    },
     totalPaid,
-    interestPaid,
-    principalPaid,
-    unpaidInterest,
-    outstandingPrincipal,
-    outstanding,
-    settled,
+    interestPaid: ledger.interestPaid,
+    principalPaid: ledger.principalPaid,
+    unpaidInterest: ledger.unpaidInterest,
+    outstandingPrincipal: ledger.outstandingPrincipal,
+    outstanding: ledger.outstanding,
+    settled: ledger.outstanding <= 0.009,
+    monthlyInterest: money(
+      ledger.outstandingPrincipal *
+        (pledge.rate_period === "monthly" ? pledge.interest_rate : pledge.interest_rate / 12) /
+        100,
+    ),
     elapsed: {
-      days: calc.days,
-      completedMonths: calc.completedMonths,
-      remainingDays: calc.remainingDays,
+      days: elapsed.days,
+      completedMonths: elapsed.completedMonths,
+      remainingDays: elapsed.remainingDays,
     },
   };
 }
@@ -116,6 +161,8 @@ export function allocatePayment(pledge: PledgeRow, amount: number, asOf = todayY
 export function hydrate(pledge: PledgeRow, asOf = todayYmd()) {
   const gold = itemsFor(pledge.id);
   const payments = paymentsFor(pledge.id);
+  const photos = photosFor(pledge.id);
   const finance = settle(pledge, asOf);
-  return { ...pledge, gold, payments, finance };
+  const total_weight = money(gold.reduce((s, g) => s + g.weight_grams * g.quantity, 0));
+  return { ...pledge, partial_month_policy: finance.policy, gold, payments, photos, finance, total_weight };
 }

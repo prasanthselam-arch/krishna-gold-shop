@@ -2,8 +2,11 @@ node_modules
 dist
 data/*.db
 data/*.db-*
+data/photos/
 backups/*
 !backups/.gitkeep
 .env
 *.log
+logs/
+.run/
 .DS_Store

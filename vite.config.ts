@@ -5,9 +5,10 @@ export default defineConfig({
   root: "client",
   plugins: [react()],
   server: {
-    port: 5173,
+    port: Number(process.env.UI_PORT || 5173),
+    strictPort: true,
     proxy: {
-      "/api": "http://127.0.0.1:8787",
+      "/api": `http://127.0.0.1:${process.env.PORT || 8787}`,
     },
   },
   build: {

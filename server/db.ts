@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5,11 +6,12 @@ import Database from "better-sqlite3";
 import bcrypt from "bcryptjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-export const dataDir = path.join(root, "data");
+export const dataDir = path.resolve(process.env.DATA_DIR || path.join(root, "data"));
+export const backupDir = path.resolve(process.env.BACKUP_DIR || path.join(root, "backups"));
 export const dbPath = path.join(dataDir, "shop.db");
 
 fs.mkdirSync(dataDir, { recursive: true });
-fs.mkdirSync(path.join(root, "backups"), { recursive: true });
+fs.mkdirSync(backupDir, { recursive: true });
 
 export const db = new Database(dbPath);
 db.pragma("journal_mode = WAL");
@@ -108,39 +110,70 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS photos (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  pledge_id INTEGER NOT NULL REFERENCES pledges(id),
+  kind TEXT NOT NULL,
+  file TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_pledges_token ON pledges(token);
+CREATE INDEX IF NOT EXISTS idx_photos_pledge ON photos(pledge_id);
 CREATE INDEX IF NOT EXISTS idx_pledges_name ON pledges(customer_name);
 CREATE INDEX IF NOT EXISTS idx_pledges_status ON pledges(status);
 CREATE INDEX IF NOT EXISTS idx_payments_pledge ON payments(pledge_id);
 CREATE INDEX IF NOT EXISTS idx_items_pledge ON gold_items(pledge_id);
 `);
 
-function seed() {
-  const username = process.env.SHOP_USERNAME || "owner";
-  const password = process.env.SHOP_PASSWORD || "KrishnaGold@123";
-  const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username) as
-    | { id: number }
-    | undefined;
-  if (!existing) {
-    db.prepare("INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)").run(
-      username,
-      bcrypt.hashSync(password, 12),
-      new Date().toISOString(),
+export const photosDir = path.join(dataDir, "photos");
+fs.mkdirSync(photosDir, { recursive: true });
+
+export const DEFAULT_PASSWORD = "KrishnaGold@123";
+
+function columnExists(table: string, column: string): boolean {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  return cols.some((c) => c.name === column);
+}
+
+function migrate() {
+  if (!columnExists("users", "must_change_password")) {
+    db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnExists("pledges", "partial_month_policy")) {
+    db.exec("ALTER TABLE pledges ADD COLUMN partial_month_policy TEXT");
+    db.prepare("UPDATE pledges SET partial_month_policy = ? WHERE partial_month_policy IS NULL").run(
+      getSetting("partial_month_policy") || "actual_days",
     );
   }
+}
 
+function seed() {
   const defaults: Record<string, string> = {
     shop_name: "KRISHNA GOLD SHOP",
     partial_month_policy: process.env.PARTIAL_MONTH_POLICY || "actual_days",
     timezone: "Asia/Kolkata",
     currency: "INR",
+    jwt_secret: crypto.randomBytes(48).toString("hex"),
   };
   const insert = db.prepare(
     "INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING",
   );
   for (const [k, v] of Object.entries(defaults)) insert.run(k, v);
+
+  const username = process.env.SHOP_USERNAME || "owner";
+  const password = process.env.SHOP_PASSWORD || DEFAULT_PASSWORD;
+  const existing = db.prepare("SELECT id FROM users WHERE username = ?").get(username) as
+    | { id: number }
+    | undefined;
+  if (!existing) {
+    db.prepare(
+      "INSERT INTO users (username, password_hash, created_at, must_change_password) VALUES (?, ?, ?, ?)",
+    ).run(username, bcrypt.hashSync(password, 12), new Date().toISOString(), password === DEFAULT_PASSWORD ? 1 : 0);
+  }
 }
 
+migrate();
 seed();
 
 export function getSetting(key: string): string {

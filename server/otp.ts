@@ -80,16 +80,19 @@ export async function deliverOtp(opts: {
   mobile?: string;
   code: string;
 }): Promise<{ delivery: DeliveryResult; demoCode?: string }> {
+  let failure: DeliveryResult | null = null;
+  if (opts.mobile && process.env.TWILIO_ACCOUNT_SID) {
+    const e164 = opts.mobile.startsWith("+") ? opts.mobile : `+91${opts.mobile}`;
+    const result = await sendSms(e164, opts.code);
+    if (result.sent) return { delivery: result };
+    failure = result;
+  }
   if (opts.email && process.env.SMTP_HOST) {
     const result = await sendEmail(opts.email, opts.code);
     if (result.sent) return { delivery: result };
-    return { delivery: result, demoCode: opts.code };
+    failure = result;
   }
-  if (opts.mobile && process.env.TWILIO_ACCOUNT_SID) {
-    const result = await sendSms(opts.mobile, opts.code);
-    if (result.sent) return { delivery: result };
-    return { delivery: result, demoCode: opts.code };
-  }
+  if (failure) return { delivery: failure, demoCode: opts.code };
   return {
     delivery: {
       channel: "demo",
@@ -138,8 +141,9 @@ export function verifyChallenge(pledgeId: number, code: string): { ok: true } | 
     return { ok: false, error: "Too many incorrect attempts. Generate a new OTP." };
   }
 
-  const hash = hashOtp(row.salt, code.trim());
-  if (hash !== row.code_hash) {
+  const hash = Buffer.from(hashOtp(row.salt, code.trim()), "hex");
+  const expected = Buffer.from(row.code_hash, "hex");
+  if (hash.length !== expected.length || !crypto.timingSafeEqual(hash, expected)) {
     db.prepare("UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = ?").run(row.id);
     return { ok: false, error: "Incorrect OTP." };
   }

@@ -1,16 +1,30 @@
 const TZ = "Asia/Kolkata";
 
+const ymdFormatter = new Intl.DateTimeFormat("en-CA", {
+  timeZone: TZ,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
 export function nowIso(): string {
   return new Date().toISOString();
 }
 
 export function todayYmd(): string {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: TZ,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
+  return ymdFormatter.format(new Date());
+}
+
+/** Calendar date (Asia/Kolkata) of an ISO timestamp. */
+export function istYmd(iso: string): string {
+  return ymdFormatter.format(new Date(iso));
+}
+
+export function isValidYmd(ymd: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) return false;
+  const [y, m, d] = ymd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCFullYear() === y && dt.getUTCMonth() === m - 1 && dt.getUTCDate() === d;
 }
 
 export function formatDisplayDate(ymd: string): string {
@@ -40,6 +54,11 @@ export function diffDays(startYmd: string, endYmd: string): number {
   return Math.round((b - a) / 86400000);
 }
 
+/**
+ * Whole calendar months and leftover days between two dates.
+ * Months are always counted from the start date (31 Jan + 1 month = 28/29 Feb,
+ * + 2 months = 31 Mar), so month-end start dates do not drift.
+ */
 export function monthsAndRemainingDays(startYmd: string, endYmd: string): {
   months: number;
   extraDays: number;
@@ -49,14 +68,8 @@ export function monthsAndRemainingDays(startYmd: string, endYmd: string): {
   if (totalDays <= 0) return { months: 0, extraDays: 0, totalDays };
 
   let months = 0;
-  let cursor = startYmd;
-  while (true) {
-    const next = addCalendarMonths(cursor, 1);
-    if (next > endYmd) break;
-    months += 1;
-    cursor = next;
-  }
-  const extraDays = diffDays(cursor, endYmd);
+  while (addCalendarMonths(startYmd, months + 1) <= endYmd) months += 1;
+  const extraDays = diffDays(addCalendarMonths(startYmd, months), endYmd);
   return { months, extraDays, totalDays };
 }
 

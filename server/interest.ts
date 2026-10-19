@@ -90,6 +90,92 @@ export function calculateInterest(input: CalcInput): CalcResult {
   };
 }
 
+export interface LedgerPayment {
+  date: string;
+  amount: number;
+}
+
+export interface LedgerAllocation {
+  amount: number;
+  interest: number;
+  principal: number;
+  balanceAfter: number;
+}
+
+export interface LedgerResult {
+  interestCharged: number;
+  interestPaid: number;
+  principalPaid: number;
+  unpaidInterest: number;
+  outstandingPrincipal: number;
+  outstanding: number;
+  allocations: LedgerAllocation[];
+}
+
+/**
+ * Replays a loan day by day through its payments. Interest accrues only on the
+ * principal still outstanding (plus unpaid interest when compounding), and each
+ * payment clears unpaid interest first, then principal. The partial-month policy
+ * is always measured from the pledge date, so a loan with no payments gives
+ * exactly the same interest as calculateInterest().
+ */
+export function runLedger(
+  loan: Omit<CalcInput, "endDate">,
+  payments: LedgerPayment[],
+  asOf: string,
+): LedgerResult {
+  const mRate = monthlyRate(Number(loan.ratePercent) || 0, loan.ratePeriod);
+  let principal = Number(loan.principal) || 0;
+  let unpaid = 0;
+  let charged = 0;
+  let interestPaid = 0;
+  let principalPaid = 0;
+  let lastFactor = 0;
+
+  const advanceTo = (date: string) => {
+    const factor = timeInMonths(loan.startDate, date, loan.partialMonthPolicy).timeFactor;
+    const delta = factor - lastFactor;
+    if (delta <= 0) return;
+    const add =
+      loan.interestType === "simple"
+        ? principal * mRate * delta
+        : (principal + unpaid) * (Math.pow(1 + mRate, delta) - 1);
+    unpaid = roundMoney(unpaid + add);
+    charged = roundMoney(charged + add);
+    lastFactor = factor;
+  };
+
+  const allocations: LedgerAllocation[] = [];
+  for (const p of [...payments].sort((a, b) => a.date.localeCompare(b.date))) {
+    if (p.date > asOf) break;
+    advanceTo(p.date);
+    const amount = roundMoney(Math.min(p.amount, principal + unpaid));
+    const toInterest = roundMoney(Math.min(amount, unpaid));
+    const toPrincipal = roundMoney(amount - toInterest);
+    unpaid = roundMoney(unpaid - toInterest);
+    principal = roundMoney(principal - toPrincipal);
+    interestPaid = roundMoney(interestPaid + toInterest);
+    principalPaid = roundMoney(principalPaid + toPrincipal);
+    allocations.push({
+      amount,
+      interest: toInterest,
+      principal: toPrincipal,
+      balanceAfter: roundMoney(principal + unpaid),
+    });
+  }
+  advanceTo(asOf);
+
+  return {
+    interestCharged: charged,
+    interestPaid,
+    principalPaid,
+    unpaidInterest: unpaid,
+    outstandingPrincipal: principal,
+    outstanding: roundMoney(principal + unpaid),
+    allocations,
+  };
+}
+
 export function repaymentChart(
   principal: number,
   ratePercent: number,

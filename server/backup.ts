@@ -1,16 +1,13 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { db, dbPath } from "./db.ts";
+import { backupDir, db } from "./db.ts";
 
-const backupDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "backups");
-
-export function backupNow(reason = "manual"): string {
+/** Uses SQLite's online backup API, which is safe while the shop is writing. */
+export async function backupNow(reason = "manual"): Promise<string> {
   fs.mkdirSync(backupDir, { recursive: true });
-  db.pragma("wal_checkpoint(PASSIVE)");
   const stamp = new Date().toISOString().replaceAll(":", "-").replace(/\..+$/, "");
   const dest = path.join(backupDir, `shop-${stamp}-${reason}.db`);
-  fs.copyFileSync(dbPath, dest);
+  await db.backup(dest);
 
   const files = fs
     .readdirSync(backupDir)
@@ -28,5 +25,5 @@ export function maybeBackup(reason: string) {
   const now = Date.now();
   if (now - lastBackup < 5 * 60 * 1000) return;
   lastBackup = now;
-  backupNow(reason);
+  backupNow(reason).catch((err) => console.error("Backup failed:", err));
 }
