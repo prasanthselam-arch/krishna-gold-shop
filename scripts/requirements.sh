@@ -22,7 +22,12 @@ run_cmd() {
 }
 
 version_of() {
-  "$1" --version 2>&1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -1
+  local flag v
+  # openssl only understands "version"; most tools use "--version".
+  for flag in --version version -V; do
+    v=$("$1" "$flag" 2>&1 | grep -oE '[0-9]+(\.[0-9]+)+' | head -1 || true)
+    [ -n "$v" ] && { echo "$v"; return; }
+  done
 }
 
 # true when $1 >= $2

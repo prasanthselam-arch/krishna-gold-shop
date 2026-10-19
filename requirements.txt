@@ -15,6 +15,7 @@ node      20.0.0  nvm:22                                                        
 npm       9.0.0   nvm:22                                                                  # comes with Node.js
 curl      7.0     apt:curl dnf:curl yum:curl pacman:curl zypper:curl brew:curl            # health checks, downloads
 ss        -       apt:iproute2 dnf:iproute yum:iproute pacman:iproute2 zypper:iproute2    # port checks
+openssl   1.1     apt:openssl dnf:openssl yum:openssl pacman:openssl zypper:openssl brew:openssl  # HTTPS certificate (camera on phones)
 setsid    -       apt:util-linux dnf:util-linux yum:util-linux pacman:util-linux zypper:util-linux brew:util-linux  # background server
 
 ?python3  3.6     apt:python3 dnf:python3 yum:python3 pacman:python zypper:python3 brew:python  # compile better-sqlite3

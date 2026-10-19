@@ -1,7 +1,7 @@
 # krishna-gold-shop
 
-Gold loan (pledge) desk for Krishna Gold Shop: register pledges with customer and jewellery
-photos, print ID-card size bills with a barcode, take payments, and return gold after OTP check.
+Gold loan desk for Krishna Gold Shop: register customers with customer and jewellery photos,
+print ID-card size bills with a QR code, take payments, and return gold.
 
 ## Setup on a new computer
 
@@ -24,7 +24,7 @@ The server runs in the background, so the terminal stays free.
 ./run.sh start dev    # development with auto-reload, open http://localhost:5173
 ./run.sh stop
 ./run.sh restart
-./run.sh status
+./run.sh status       # also shows the https:// address for phones and tablets
 ./run.sh logs         # last 100 lines; "logs -f" to follow
 ./run.sh build        # rebuild the web app (then restart)
 ./run.sh backup       # database backup now
@@ -37,37 +37,63 @@ Forgot it? Run `./run.sh reset-password`.
 
 ## Daily use
 
-1. **New pledge**: fill customer details, take the customer photo, add gold items, take the
-   jewellery photo, enter loan amount and rate, then click **Save pledge & print bill**.
+1. **New Registration**: fill customer details, take the customer photo, add gold items, take
+   the jewellery photo, enter the loan amount and the interest per month, either in **%** or in
+   **₹**, then click **Register & print bill**.
    Two ID-card size bills are printed: *Customer copy* and *Shop copy*.
-2. **Find / Pay / Return**: scan the barcode on the customer's bill (USB scanner or
-   **Scan with camera**), or type the token, name or mobile number.
-   - **Receive payment**: interest is cleared first, the rest reduces the loan.
-   - **Return gold**: only when nothing is due. Take photos of the person and the jewellery,
-     send the OTP, enter it, and the release bill is printed.
-3. **Records**: totals and the list of all pledges.
-4. **Interest calculator** (top bar) opens as a popup. From a pledge it opens pre-filled.
+2. **Find / Pay / Return**: scan the QR code on the customer's bill (**Scan QR** uses the
+   camera), or type the token, name or mobile number.
+   - **Receive payment**: interest is cleared first, the rest reduces the loan. Amounts are
+     whole rupees only. Optionally change the extra days of interest to round off
+     (e.g. 2 months + 16 days → 15 days, or 30 for a full month).
+   - **Give more money**: the customer takes more cash on the same items. Today's balance
+     (loan left + interest) plus the extra cash becomes a new loan with a new bill; you can
+     set the new date, interest (% or ₹), interest type and part-month rule. The old loan
+     is marked *Renewed* and links to the new one.
+   - **Return gold**: only when nothing is due. Enter the name of the person collecting
+     (pre-filled with the customer), take photos of the person and the jewellery, tick the
+     confirmation and click **Confirm & return gold**.
+   - **Print bill** reprints the ID-card bills at any time.
+3. **Records**: totals, **Collections between dates** (cash collected, interest, loan repaid,
+   cash given out, gold returned, and the payment list for any date range), and the list of
+   all registrations.
+4. **Calculator** (top bar) opens as a popup. From a registration it opens pre-filled.
+
+The app adapts to phones (portrait and landscape), tablets and large screens. On phones the
+tabs move to the bottom of the screen and popups open full screen.
 
 ## Printing bills
 
+The bill shows only: customer name, mobile number, items with quantity and weight, pledge
+date, loan amount, customer photo, jewellery photo and the QR code.
+
 The bill preview offers two paper options:
 
-- **A4 sheet (cut out)**: both cards on one A4 page with cut lines.
+- **A4 sheet**: both cards on one A4 page with cut lines.
 - **ID card printer**: page size 85.6 × 54 mm, one card per page.
 
-In the browser print dialog set *Margins: None* and enable *Background graphics*.
+The app sets the page margin to zero, so the browser does not print its header or footer
+(date, title, URL, page number). If they still appear, open *More settings* in the print
+dialog, untick *Headers and footers* and set *Margins: None*. Turn on *Background graphics*.
 
-## Camera
+## Camera (phones and tablets)
 
-The camera works on `http://localhost` or over `https://`. When opened from another computer
-or phone on the shop network over plain `http://`, browsers block the camera; the
-**Upload** button still opens the phone camera, and a USB barcode scanner always works.
+Browsers only allow the camera on `http://localhost` or on `https://`. On first start,
+`run.sh` creates a self-signed certificate and the server also listens on
+`https://<this-computer-ip>:8443` (see `./run.sh status`). Open that address on the phone,
+accept the "not secure / advanced → proceed" warning once, and the camera works for photos
+and QR scanning. Without HTTPS, **Take photo of QR** still opens the phone camera app.
 
 ## Interest rules
 
+- Interest per month can be a percentage or a fixed rupee amount. A rupee amount is turned
+  into the equivalent percentage of the loan amount, so the first month costs exactly that amount.
+- Interest is always charged in whole rupees (nearest rupee), so every amount due can be
+  paid without paise. Loan amounts and payments must be whole rupees.
 - Interest accrues only on the loan amount still outstanding; payments clear interest first.
-- Once fully paid, no further interest is added. Closed pledges are frozen at the release date.
-- The part-month rule (Settings) applies to new pledges; each pledge keeps the rule it was created with.
+- Once fully paid, no further interest is added. Closed registrations are frozen at the release date.
+- The part-month rule (Settings) applies to new registrations; each one keeps the rule it was
+  created with.
 
 ## Data and backups
 
@@ -75,4 +101,4 @@ or phone on the shop network over plain `http://`, browsers block the camera; th
 - A backup is taken at startup and at most every 5 minutes after changes; the last 30 are kept.
 - Copy `data/photos` and `backups/` to external storage regularly.
 
-See `.env.example` for SMS / email OTP and other settings.
+See `.env.example` for ports, data folders and other settings.

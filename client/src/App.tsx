@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { api, setUnauthorizedHandler, type Pledge, type Policy, type Receipt, type ReceiptKind } from "./api";
+import { api, setUnauthorizedHandler, type Pledge, type Policy, type Receipt } from "./api";
 import { errMsg } from "./format";
 import { BillPreview } from "./components/BillCards";
 import { CalculatorModal, type CalcPrefill } from "./components/CalculatorModal";
@@ -25,6 +25,7 @@ export function App() {
   const [receipt, setReceipt] = useState<Receipt | null>(null);
   const [calc, setCalc] = useState<CalcPrefill | null | undefined>(undefined);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [confirmSignOut, setConfirmSignOut] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const flashTimer = useRef<number | undefined>(undefined);
 
@@ -59,9 +60,9 @@ export function App() {
   }, [loadSession, refresh, notify]);
 
   const print = useCallback(
-    async (token: string, kind: ReceiptKind) => {
+    async (token: string) => {
       try {
-        setReceipt(await api.receipt(token, kind));
+        setReceipt(await api.receipt(token, "pledge"));
       } catch (err) {
         notify("err", errMsg(err));
       }
@@ -107,7 +108,7 @@ export function App() {
           </div>
           <nav className="tabs main">
             <button type="button" className={tab === "new" ? "active" : ""} onClick={() => setTab("new")}>
-              New pledge
+              New Registration
             </button>
             <button type="button" className={tab === "find" ? "active" : ""} onClick={() => setTab("find")}>
               Find / Pay / Return
@@ -118,21 +119,13 @@ export function App() {
           </nav>
           <div className="topbar-actions">
             <button type="button" className="btn btn-gold" onClick={() => setCalc(null)}>
-              Interest calculator
+              <span className="hide-sm">Interest </span>Calculator
             </button>
             <button type="button" className="btn btn-ghost light" onClick={() => setSettingsOpen(true)}>
               Settings
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost light"
-              onClick={async () => {
-                await api.logout().catch(() => undefined);
-                setUser(null);
-                setPledge(null);
-              }}
-            >
-              Sign out ({user})
+            <button type="button" className="btn btn-ghost light" onClick={() => setConfirmSignOut(true)}>
+              Sign out
             </button>
           </div>
         </header>
@@ -151,11 +144,11 @@ export function App() {
             <NewPledge
               tokenPreview={tokenPreview}
               onSaved={(p) => {
-                notify("ok", `Pledge saved. Token ${p.token}.`);
+                notify("ok", `Registration saved. Token ${p.token}.`);
                 setPledge(p);
                 setTab("find");
                 refresh();
-                void print(p.token, "pledge");
+                void print(p.token);
               }}
             />
           </div>
@@ -164,18 +157,21 @@ export function App() {
               pledge={pledge}
               setPledge={setPledge}
               active={tab === "find"}
-              onPrint={(t, k) => void print(t, k)}
-              onCalc={(p) =>
+              onPrint={(t) => void print(t)}
+              onCalc={(p) => {
+                const principal = p.finance.outstandingPrincipal || p.principal;
+                const inRupees = p.rate_unit === "rupees" && p.rate_amount != null && principal === p.principal;
                 setCalc({
-                  principal: p.finance.outstandingPrincipal || p.principal,
-                  rate: p.interest_rate,
+                  principal,
+                  rate: inRupees ? p.rate_amount! : p.interest_rate,
+                  unit: inRupees ? "rupees" : "percent",
                   period: p.rate_period,
                   type: p.interest_type,
                   start: p.pledge_date,
                   policy: p.partial_month_policy,
                   label: p.token,
-                })
-              }
+                });
+              }}
               notify={notify}
               onChanged={refresh}
             />
@@ -187,6 +183,34 @@ export function App() {
       </div>
 
       {calc !== undefined && <CalculatorModal prefill={calc} defaultPolicy={policy} onClose={() => setCalc(undefined)} />}
+      {confirmSignOut && (
+        <Modal
+          title="Sign out?"
+          className="confirm"
+          onClose={() => setConfirmSignOut(false)}
+          footer={
+            <>
+              <button type="button" className="btn btn-ghost" autoFocus onClick={() => setConfirmSignOut(false)}>
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn btn-danger"
+                onClick={async () => {
+                  setConfirmSignOut(false);
+                  await api.logout().catch(() => undefined);
+                  setUser(null);
+                  setPledge(null);
+                }}
+              >
+                Sign out
+              </button>
+            </>
+          }
+        >
+          <p>You will need the password to sign in again.</p>
+        </Modal>
+      )}
       {settingsOpen && (
         <SettingsModal policy={policy} onPolicy={setPolicy} onClose={() => setSettingsOpen(false)} notify={notify} />
       )}

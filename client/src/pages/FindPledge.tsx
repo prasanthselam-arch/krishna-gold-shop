@@ -1,10 +1,10 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { api, photoUrl, type HistoryRow, type OtpResult, type Photo, type Pledge, type ReceiptKind } from "../api";
-import { TOKEN_PATTERN, errMsg, formatDate, formatDateTime, grams, inr, num } from "../format";
+import { api, photoUrl, type Finance, type HistoryRow, type InterestType, type Photo, type Pledge, type Policy, type RatePeriod, type RateUnit } from "../api";
+import { POLICY_LABEL, STATUS_LABEL, TOKEN_PATTERN, errMsg, formatDate, formatDateTime, grams, inr, num, rateLabel, rupeesInput, todayYmd } from "../format";
 import { Modal } from "../components/Modal";
 import { PhotoCapture } from "../components/PhotoCapture";
 
-const BarcodeScanner = lazy(() => import("../components/BarcodeScanner").then((m) => ({ default: m.BarcodeScanner })));
+const QrScanner = lazy(() => import("../components/QrScanner").then((m) => ({ default: m.QrScanner })));
 
 const PHOTO_LABEL: Record<Photo["kind"], string> = {
   customer: "Customer (pledge)",
@@ -25,7 +25,7 @@ export function FindPledge({
   pledge: Pledge | null;
   setPledge: (p: Pledge | null) => void;
   active: boolean;
-  onPrint: (token: string, kind: ReceiptKind) => void;
+  onPrint: (token: string) => void;
   onCalc: (p: Pledge) => void;
   notify: (kind: "ok" | "err" | "warn", text: string) => void;
   onChanged: () => void;
@@ -34,7 +34,7 @@ export function FindPledge({
   const [matches, setMatches] = useState<HistoryRow[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [mode, setMode] = useState<"none" | "pay" | "release">("none");
+  const [mode, setMode] = useState<"none" | "pay" | "release" | "renew">("none");
   const [zoom, setZoom] = useState<Photo | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -92,7 +92,7 @@ export function FindPledge({
       <form className="search-bar" onSubmit={search}>
         <input
           ref={inputRef}
-          placeholder="Scan barcode, or type token / name / mobile"
+          placeholder="Scan QR, or type token / name / mobile"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           autoComplete="off"
@@ -101,7 +101,7 @@ export function FindPledge({
           Search
         </button>
         <button type="button" className="btn btn-ink" onClick={() => setScanning(true)}>
-          Scan with camera
+          Scan QR
         </button>
       </form>
 
@@ -115,7 +115,7 @@ export function FindPledge({
               </span>
               <span className="muted">{r.token}</span>
               <span>{inr.format(r.balance)}</span>
-              <span className={`status status-${r.status}`}>{r.status === "ACTIVE" ? "Active" : "Closed"}</span>
+              <span className={`status status-${r.status}`}>{STATUS_LABEL[r.status]}</span>
             </button>
           ))}
         </div>
@@ -123,8 +123,8 @@ export function FindPledge({
 
       {!pledge && !matches && (
         <div className="empty-state">
-          <p>Scan the barcode on the customer's bill to open the pledge.</p>
-          <p className="muted">A USB barcode scanner works directly: click the box above and scan.</p>
+          <p>Scan the QR code on the customer's bill to open the pledge.</p>
+          <p className="muted">A USB QR / barcode scanner works directly: click the box above and scan.</p>
         </div>
       )}
 
@@ -143,7 +143,7 @@ export function FindPledge({
             <div className="pledge-who">
               <div className="token-line">
                 {pledge.token}
-                <span className={`status status-${pledge.status}`}>{pledge.status === "ACTIVE" ? "Active" : "Closed"}</span>
+                <span className={`status status-${pledge.status}`}>{STATUS_LABEL[pledge.status]}</span>
               </div>
               <h2>{pledge.customer_name}</h2>
               <div className="muted">
@@ -152,10 +152,16 @@ export function FindPledge({
                 {pledge.email && <> · {pledge.email}</>}
               </div>
               <div className="muted">
-                Pledged on {formatDate(pledge.pledge_date)} · {pledge.interest_rate}% per{" "}
-                {pledge.rate_period === "monthly" ? "month" : "year"}
-                {pledge.interest_type === "compound" && " (compound)"}
+                Pledged on {formatDate(pledge.pledge_date)} · {rateLabel(pledge)}
               </div>
+              {pledge.renewed_from_token && (
+                <div className="muted">
+                  Includes {inr.format(pledge.carried_amount)} carried from{" "}
+                  <button type="button" className="link" onClick={() => void open(pledge.renewed_from_token!)}>
+                    {pledge.renewed_from_token}
+                  </button>
+                </div>
+              )}
             </div>
             <button type="button" className="icon-btn" aria-label="Close pledge" onClick={() => setPledge(null)}>
               ×
@@ -192,10 +198,18 @@ export function FindPledge({
           ) : (
             <section className="money-card closed">
               <div className="due">
-                <span>Closed on {pledge.released_at ? formatDateTime(pledge.released_at) : "—"}</span>
-                <strong>{inr.format(f.totalPaid)} paid</strong>
+                <span>
+                  {pledge.status === "RENEWED" ? "Renewed" : "Closed"} on {pledge.released_at ? formatDateTime(pledge.released_at) : "—"}
+                </span>
+                <strong>{inr.format(f.totalPaid)} {pledge.status === "RENEWED" ? "settled" : "paid"}</strong>
               </div>
               <div className="split">
+                {pledge.returned_to && (
+                  <div>
+                    <span>Returned to</span>
+                    <b>{pledge.returned_to}</b>
+                  </div>
+                )}
                 <div>
                   <span>Loan</span>
                   <b>{inr.format(pledge.principal)}</b>
@@ -206,6 +220,16 @@ export function FindPledge({
                 </div>
               </div>
             </section>
+          )}
+
+          {pledge.status === "RENEWED" && pledge.renewed_to_token && (
+            <div className="notice warn">
+              This loan was renewed. The items are now on{" "}
+              <button type="button" className="link" onClick={() => void open(pledge.renewed_to_token!)}>
+                {pledge.renewed_to_token}
+              </button>
+              . Use that bill for payments and return.
+            </div>
           )}
 
           <div className="action-bar">
@@ -221,16 +245,18 @@ export function FindPledge({
                 >
                   Return gold
                 </button>
+                <button
+                  type="button"
+                  className={`btn btn-ink big ${mode === "renew" ? "pressed" : ""}`}
+                  onClick={() => setMode(mode === "renew" ? "none" : "renew")}
+                >
+                  Give more money
+                </button>
               </>
             )}
-            <button type="button" className="btn btn-gold big" onClick={() => onPrint(pledge.token, pledge.status === "RELEASED" ? "release" : "pledge")}>
+            <button type="button" className="btn btn-gold big" onClick={() => onPrint(pledge.token)}>
               Print bill
             </button>
-            {pledge.payments.length > 0 && (
-              <button type="button" className="btn btn-ghost big" onClick={() => onPrint(pledge.token, "payment")}>
-                Print last payment
-              </button>
-            )}
             <button type="button" className="btn btn-ghost big" onClick={() => onCalc(pledge)}>
               Calculator
             </button>
@@ -243,7 +269,6 @@ export function FindPledge({
                 setPledge(p);
                 onChanged();
               }}
-              onPrint={() => onPrint(pledge.token, "payment")}
               notify={notify}
             />
           )}
@@ -254,8 +279,20 @@ export function FindPledge({
               onDone={(p) => {
                 setPledge(p);
                 onChanged();
-                notify("ok", `Gold returned. Pledge ${p.token} is closed.`);
-                onPrint(p.token, "release");
+                notify("ok", `Gold returned to ${p.returned_to}. ${p.token} is closed.`);
+              }}
+              notify={notify}
+            />
+          )}
+
+          {mode === "renew" && pledge.status === "ACTIVE" && (
+            <RenewPanel
+              pledge={pledge}
+              onDone={(p) => {
+                setPledge(p);
+                onChanged();
+                notify("ok", `New loan ${p.token} created for ${inr.format(p.principal)}. Give the customer the new bill.`);
+                onPrint(p.token);
               }}
               notify={notify}
             />
@@ -304,9 +341,20 @@ export function FindPledge({
                   <tbody>
                     {pledge.payments.map((p) => (
                       <tr key={p.id}>
-                        <td>{formatDateTime(p.received_at)}</td>
+                        <td>
+                          {formatDateTime(p.received_at)}
+                          {p.method === "renewal" && <div className="muted small">{p.notes}</div>}
+                        </td>
                         <td>{inr.format(p.amount)}</td>
-                        <td>{inr.format(p.interest_portion)}</td>
+                        <td>
+                          {inr.format(p.interest_portion)}
+                          {p.interest_adjustment !== 0 && (
+                            <div className="muted small">
+                              {p.interest_adjustment < 0 ? "waived " : "added "}
+                              {inr.format(Math.abs(p.interest_adjustment))}
+                            </div>
+                          )}
+                        </td>
                         <td>{inr.format(p.principal_portion)}</td>
                         <td>{inr.format(p.balance_after)}</td>
                       </tr>
@@ -321,7 +369,7 @@ export function FindPledge({
 
       {scanning && (
         <Suspense fallback={null}>
-          <BarcodeScanner onClose={closeScanner} onResult={onScan} />
+          <QrScanner onClose={closeScanner} onResult={onScan} />
         </Suspense>
       )}
       {zoom && (
@@ -334,23 +382,104 @@ export function FindPledge({
   );
 }
 
+/**
+ * Lets the owner round the extra days of interest (e.g. 16 → 15, or 30 for a full month).
+ * Empty or unchanged means the real days are used.
+ */
+function ExtraDaysField({
+  finance,
+  value,
+  onChange,
+}: {
+  finance: Finance;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const actual = finance.elapsed.remainingDays;
+  const changed = value !== "" && Number(value) !== actual;
+  return (
+    <div className="days-adjust">
+      <span>Interest for</span>
+      <b>{finance.elapsed.completedMonths} months +</b>
+      <input
+        inputMode="numeric"
+        aria-label="Extra days"
+        placeholder={String(actual)}
+        value={value}
+        onChange={(e) => onChange(e.target.value.replace(/\D/g, "").slice(0, 2))}
+      />
+      <span>days</span>
+      {changed ? (
+        <button type="button" className="link" onClick={() => onChange(String(actual))}>
+          Use real {actual} days
+        </button>
+      ) : (
+        <span className="muted small">Optional: change the days to round off</span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Live amounts due with the chosen extra days (and date), from the server.
+ * The server ignores extra days equal to the real days.
+ */
+function useDue(pledge: Pledge, daysText: string, date: string | undefined, notify: (kind: "ok" | "err" | "warn", text: string) => void) {
+  const days = daysText === "" ? undefined : Number(daysText);
+  const today = !date || date === todayYmd();
+  const needsFetch = !today || (days !== undefined && days !== pledge.finance.elapsed.remainingDays);
+  const [due, setDue] = useState<Finance>(pledge.finance);
+  const [loading, setLoading] = useState(false);
+  const notifyRef = useRef(notify);
+  notifyRef.current = notify;
+  useEffect(() => {
+    if (!needsFetch) {
+      setDue(pledge.finance);
+      setLoading(false);
+      return;
+    }
+    if (days !== undefined && days > 31) {
+      notifyRef.current("warn", "Extra days can be at most 31.");
+      return;
+    }
+    let live = true;
+    setLoading(true);
+    const id = window.setTimeout(() => {
+      api
+        .due(pledge.token, { extraDays: days, date })
+        .then((d) => live && setDue(d))
+        .catch((err) => live && notifyRef.current("err", errMsg(err)))
+        .finally(() => live && setLoading(false));
+    }, 250);
+    return () => {
+      live = false;
+      window.clearTimeout(id);
+    };
+  }, [pledge.token, pledge.finance, needsFetch, days, date]);
+  return { due, extraDays: days, loading };
+}
+
 function PaymentPanel({
   pledge,
   onDone,
-  onPrint,
   notify,
 }: {
   pledge: Pledge;
   onDone: (p: Pledge) => void;
-  onPrint: () => void;
   notify: (kind: "ok" | "err" | "warn", text: string) => void;
 }) {
   const [amount, setAmount] = useState("");
+  const [daysText, setDaysText] = useState(String(pledge.finance.elapsed.remainingDays));
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ applied: number; interest_portion: number; principal_portion: number; remaining_balance: number } | null>(null);
-  const f = pledge.finance;
+  const { due: f, extraDays, loading } = useDue(pledge, daysText, undefined, notify);
   const value = num(amount);
-  const tooMuch = value > f.outstanding + 0.009;
+  const maxToday = Math.ceil(f.outstanding - 0.009);
+  const tooMuch = value > maxToday;
+
+  useEffect(() => {
+    setDaysText(String(pledge.finance.elapsed.remainingDays));
+  }, [pledge.finance]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -360,7 +489,7 @@ function PaymentPanel({
     }
     setBusy(true);
     try {
-      const r = await api.pay(pledge.token, value);
+      const r = await api.pay(pledge.token, value, extraDays);
       setResult(r);
       setAmount("");
       onDone(r.pledge);
@@ -380,22 +509,29 @@ function PaymentPanel({
   return (
     <section className="panel action-panel">
       <h3>Receive payment</h3>
+      <ExtraDaysField finance={pledge.finance} value={daysText} onChange={setDaysText} />
+      {f.adjustment !== 0 && (
+        <p className="muted">
+          Interest due {inr.format(pledge.finance.unpaidInterest)} → <b>{inr.format(f.unpaidInterest)}</b> ({f.adjustment < 0 ? "waived" : "added"}{" "}
+          {inr.format(Math.abs(f.adjustment))})
+        </p>
+      )}
       <form className="pay-form" onSubmit={submit}>
         <div className="field grow">
-          <label>Amount received (₹)</label>
-          <input className="big-input" inputMode="decimal" autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} />
+          <label>Amount received (₹, whole rupees)</label>
+          <input className="big-input" inputMode="numeric" autoFocus value={amount} onChange={(e) => setAmount(rupeesInput(e.target.value))} />
         </div>
-        <button type="button" className="btn btn-ghost" onClick={() => setAmount(String(f.unpaidInterest))} disabled={f.unpaidInterest <= 0}>
-          Interest only {inr.format(f.unpaidInterest)}
+        <button type="button" className="btn btn-ghost" onClick={() => setAmount(String(Math.ceil(f.unpaidInterest)))} disabled={f.unpaidInterest <= 0 || loading}>
+          Interest only {inr.format(Math.ceil(f.unpaidInterest))}
         </button>
-        <button type="button" className="btn btn-ghost" onClick={() => setAmount(String(f.outstanding))}>
-          Full {inr.format(f.outstanding)}
+        <button type="button" className="btn btn-ghost" onClick={() => setAmount(String(maxToday))} disabled={loading}>
+          Full {inr.format(maxToday)}
         </button>
-        <button className="btn btn-ok" disabled={busy || tooMuch}>
+        <button className="btn btn-ok" disabled={busy || tooMuch || loading}>
           Save payment
         </button>
       </form>
-      {tooMuch && <div className="notice warn">Amount is more than the total due ({inr.format(f.outstanding)}).</div>}
+      {tooMuch && <div className="notice warn">Amount is more than the total due ({inr.format(maxToday)}).</div>}
       {value > 0 && !tooMuch && (
         <p className="muted">
           This goes {inr.format(Math.min(value, f.unpaidInterest))} to interest and {inr.format(Math.max(0, value - f.unpaidInterest))} to the loan.
@@ -415,11 +551,183 @@ function PaymentPanel({
             Balance<br />
             <strong>{inr.format(result.remaining_balance)}</strong>
           </div>
-          <button type="button" className="btn btn-gold" onClick={onPrint}>
-            Print receipt
-          </button>
         </div>
       )}
+    </section>
+  );
+}
+
+/**
+ * Top-up on the same items: today's balance is carried into a new loan plus the
+ * extra cash given now. The owner can change the date, rate and rules.
+ */
+function RenewPanel({
+  pledge,
+  onDone,
+  notify,
+}: {
+  pledge: Pledge;
+  onDone: (p: Pledge) => void;
+  notify: (kind: "ok" | "err" | "warn", text: string) => void;
+}) {
+  const lastPay = pledge.payments.length ? pledge.payments[pledge.payments.length - 1].received_at : "";
+  const minDate = [pledge.pledge_date, lastPay ? new Date(lastPay).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }) : ""].sort().pop()!;
+  const [extra, setExtra] = useState("");
+  const [date, setDate] = useState(todayYmd());
+  const [unit, setUnit] = useState<RateUnit>(pledge.rate_unit);
+  const [rate, setRate] = useState(String(pledge.rate_unit === "rupees" && pledge.rate_amount !== null ? pledge.rate_amount : Number(pledge.interest_rate.toFixed(4))));
+  const [period, setPeriod] = useState<RatePeriod>(pledge.rate_period);
+  const [type, setType] = useState<InterestType>(pledge.interest_type);
+  const [rule, setRule] = useState<Policy>(pledge.partial_month_policy);
+  const [daysText, setDaysText] = useState(String(pledge.finance.elapsed.remainingDays));
+  const [busy, setBusy] = useState(false);
+  const { due, extraDays, loading } = useDue(pledge, daysText, date, notify);
+
+  const extraN = extra === "" ? 0 : Number(extra);
+  const carried = due.outstanding;
+  const newLoan = Math.round(carried + extraN);
+  const rateN = num(rate);
+  const perPeriod = unit === "rupees" ? rateN : (newLoan * rateN) / 100;
+  const monthly = period === "monthly" ? perPeriod : perPeriod / 12;
+
+  async function submit(e: FormEvent) {
+    e.preventDefault();
+    if (!(newLoan > 0)) return notify("err", "Enter the extra amount to give.");
+    if (!(rateN > 0)) return notify("err", "Enter the interest rate.");
+    if (unit === "rupees" && !Number.isInteger(rateN)) return notify("err", "Interest amount must be in whole rupees.");
+    if (!window.confirm(`Close ${pledge.token} and create a new loan of ${inr.format(newLoan)}?\nGive the customer ${inr.format(extraN)} now.`)) return;
+    setBusy(true);
+    try {
+      onDone(
+        await api.renew(pledge.token, {
+          extra_amount: extraN,
+          pledge_date: date,
+          interest_rate: rateN,
+          rate_unit: unit,
+          rate_period: period,
+          interest_type: type,
+          partial_month_policy: rule,
+          extra_days: extraDays,
+        }),
+      );
+    } catch (err) {
+      notify("err", errMsg(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel action-panel">
+      <h3>Give more money (new loan on the same items)</h3>
+      <p className="muted">
+        The balance on this loan is moved into a new loan with a new bill. The old bill will no longer be valid.
+      </p>
+      <form onSubmit={submit}>
+        <div className="grid-4">
+          <div className="field">
+            <label>Extra amount to give now (₹)</label>
+            <input className="big-input" inputMode="numeric" autoFocus value={extra} onChange={(e) => setExtra(rupeesInput(e.target.value))} />
+          </div>
+          <div className="field">
+            <label>New loan date</label>
+            <input
+              type="date"
+              min={minDate}
+              max={todayYmd()}
+              value={date}
+              onChange={(e) => {
+                setDate(e.target.value || todayYmd());
+                setDaysText("");
+              }}
+            />
+          </div>
+          <div className="field">
+            <label>Interest {unit === "percent" ? "rate (%)" : "amount (₹)"}</label>
+            <div className="input-unit">
+              <input
+                className="big-input"
+                inputMode={unit === "rupees" ? "numeric" : "decimal"}
+                value={rate}
+                onChange={(e) => setRate(unit === "rupees" ? rupeesInput(e.target.value) : e.target.value)}
+              />
+              <div className="seg" role="group" aria-label="Interest unit">
+                <button type="button" className={unit === "percent" ? "active" : ""} onClick={() => setUnit("percent")}>
+                  %
+                </button>
+                <button
+                  type="button"
+                  className={unit === "rupees" ? "active" : ""}
+                  onClick={() => {
+                    setUnit("rupees");
+                    setRate(rupeesInput(rate));
+                  }}
+                >
+                  ₹
+                </button>
+              </div>
+            </div>
+          </div>
+          <div className="field">
+            <label>Rate is per</label>
+            <select value={period} onChange={(e) => setPeriod(e.target.value as RatePeriod)}>
+              <option value="monthly">Month</option>
+              <option value="annual">Year</option>
+            </select>
+          </div>
+        </div>
+        <details className="more">
+          <summary>More options</summary>
+          <div className="grid-2">
+            <div className="field">
+              <label>Interest type</label>
+              <select value={type} onChange={(e) => setType(e.target.value as InterestType)}>
+                <option value="simple">Simple (normal)</option>
+                <option value="compound">Compound (monthly)</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Part-month rule</label>
+              <select value={rule} onChange={(e) => setRule(e.target.value as Policy)}>
+                {(Object.keys(POLICY_LABEL) as Policy[]).map((k) => (
+                  <option key={k} value={k}>
+                    {POLICY_LABEL[k]}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+        </details>
+
+        <h4>Old loan on {formatDate(date)}</h4>
+        <ExtraDaysField finance={due} value={daysText} onChange={setDaysText} />
+        <div className="renew-sum">
+          <div>
+            <span>Loan left</span>
+            <b>{inr.format(due.outstandingPrincipal)}</b>
+          </div>
+          <div>
+            <span>+ Interest due{due.adjustment !== 0 && ` (${due.adjustment < 0 ? "waived" : "added"} ${inr.format(Math.abs(due.adjustment))})`}</span>
+            <b>{inr.format(due.unpaidInterest)}</b>
+          </div>
+          <div>
+            <span>+ Extra cash now</span>
+            <b>{inr.format(extraN)}</b>
+          </div>
+          <div className="total">
+            <span>= New loan amount</span>
+            <b>{inr.format(newLoan)}</b>
+          </div>
+        </div>
+        {Number.isFinite(monthly) && monthly > 0 && newLoan > 0 && (
+          <div className="hint-strip">
+            New interest <b>{inr.format(Math.round(monthly))}</b> per month on {inr.format(newLoan)}
+          </div>
+        )}
+        <button className="btn btn-gold xl" disabled={busy || loading || !(newLoan > 0)}>
+          {busy ? "Saving…" : "Create new loan & print bill"}
+        </button>
+      </form>
     </section>
   );
 }
@@ -437,8 +745,8 @@ function ReleasePanel({
 }) {
   const [personPhoto, setPersonPhoto] = useState("");
   const [jewelPhoto, setJewelPhoto] = useState("");
-  const [otpInfo, setOtpInfo] = useState<OtpResult | null>(null);
-  const [otp, setOtp] = useState("");
+  const [checked, setChecked] = useState(false);
+  const [returnedTo, setReturnedTo] = useState(pledge.customer_name);
   const [busy, setBusy] = useState(false);
   const f = pledge.finance;
 
@@ -457,25 +765,13 @@ function ReleasePanel({
   }
 
   const photosReady = !!personPhoto && !!jewelPhoto;
-
-  async function sendOtp() {
-    setBusy(true);
-    try {
-      const r = await api.requestOtp(pledge.token);
-      setOtpInfo(r);
-      notify(r.sent ? "ok" : "warn", r.message);
-    } catch (err) {
-      notify("err", errMsg(err));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const nameReady = returnedTo.trim().length >= 2;
 
   async function release(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     try {
-      onDone(await api.release(pledge.token, otp.trim(), { customer: personPhoto, jewel: jewelPhoto }));
+      onDone(await api.release(pledge.token, returnedTo.trim(), { customer: personPhoto, jewel: jewelPhoto }));
     } catch (err) {
       notify("err", errMsg(err));
     } finally {
@@ -487,42 +783,34 @@ function ReleasePanel({
     <section className="panel action-panel">
       <h3>Return gold</h3>
       <ol className="steps">
-        <li className={photosReady ? "done" : "current"}>
+        <li className={nameReady ? "done" : "current"}>
+          <b>Who is collecting the gold?</b>
+          <div className="field">
+            <label>Returned to (name) *</label>
+            <input className="big-input" value={returnedTo} onChange={(e) => setReturnedTo(e.target.value)} maxLength={120} autoComplete="off" />
+          </div>
+          <p className="muted small">
+            {returnedTo.trim() === pledge.customer_name
+              ? "Change it if someone else (e.g. a family member) is collecting."
+              : `Customer on the bill: ${pledge.customer_name}`}
+          </p>
+        </li>
+        <li className={photosReady ? "done" : nameReady ? "current" : ""}>
           <b>Take photos</b>
           <div className="grid-2">
             <PhotoCapture label="Person collecting" hint="Face clearly visible" value={personPhoto} onChange={setPersonPhoto} facing="user" />
             <PhotoCapture label="Jewellery being returned" hint="All items together" value={jewelPhoto} onChange={setJewelPhoto} />
           </div>
         </li>
-        <li className={!photosReady ? "" : otpInfo ? "done" : "current"}>
-          <b>Send OTP to customer ({pledge.mobile})</b>
-          <div>
-            <button type="button" className="btn btn-ink" disabled={busy || !photosReady} onClick={() => void sendOtp()}>
-              {otpInfo ? "Send OTP again" : "Send OTP"}
-            </button>
-          </div>
-          {otpInfo?.demo && otpInfo.demoOtp && (
-            <div className="notice demo">
-              SMS/email is not set up, so the OTP was not sent. Demo OTP: <code>{otpInfo.demoOtp}</code>
-            </div>
-          )}
-        </li>
-        <li className={otpInfo ? "current" : ""}>
-          <b>Enter OTP and return gold</b>
+        <li className={photosReady && nameReady ? "current" : ""}>
+          <b>Confirm and return gold</b>
           <form className="pay-form" onSubmit={release}>
-            <div className="field">
-              <label>6-digit OTP</label>
-              <input
-                className="big-input otp"
-                inputMode="numeric"
-                maxLength={6}
-                value={otp}
-                onChange={(e) => setOtp(e.target.value.replace(/\D/g, ""))}
-                disabled={!otpInfo}
-              />
-            </div>
-            <button className="btn btn-danger" disabled={busy || otp.length !== 6 || !photosReady}>
-              Confirm & return gold
+            <label className="check">
+              <input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} />
+              I checked the customer&apos;s bill and the items match. Gold is handed to <b>{returnedTo.trim() || "—"}</b>.
+            </label>
+            <button className="btn btn-danger" disabled={busy || !checked || !photosReady || !nameReady}>
+              {busy ? "Returning…" : "Confirm & return gold"}
             </button>
           </form>
         </li>

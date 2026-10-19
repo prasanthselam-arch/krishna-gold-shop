@@ -1,11 +1,22 @@
-import { ApiError, type Policy } from "./api";
+import { ApiError, type Pledge, type PledgeStatus, type Policy } from "./api";
 
 export const inr = new Intl.NumberFormat("en-IN", {
   style: "currency",
   currency: "INR",
-  minimumFractionDigits: 2,
+  minimumFractionDigits: 0,
   maximumFractionDigits: 2,
 });
+
+export const STATUS_LABEL: Record<PledgeStatus, string> = {
+  ACTIVE: "Active",
+  RELEASED: "Closed",
+  RENEWED: "Renewed",
+};
+
+/** Whole rupees only: keeps digits, drops paise and anything else typed. */
+export function rupeesInput(v: string): string {
+  return v.split(".")[0].replace(/\D/g, "");
+}
 
 export function formatDate(ymd: string): string {
   if (!ymd) return "—";
@@ -56,5 +67,14 @@ export const POLICY_LABEL: Record<Policy, string> = {
   thirty_day_month: "Full months + extra days ÷ 30",
   round_up_month: "Extra days count as a full month",
 };
+
+export function rateLabel(p: Pick<Pledge, "interest_rate" | "rate_unit" | "rate_amount" | "rate_period" | "interest_type">): string {
+  const per = p.rate_period === "monthly" ? "month" : "year";
+  const rate =
+    p.rate_unit === "rupees" && p.rate_amount != null
+      ? `${inr.format(p.rate_amount)} / ${per}`
+      : `${Number(p.interest_rate.toFixed(4))}% / ${per}`;
+  return p.interest_type === "compound" ? `${rate} (compound)` : rate;
+}
 
 export const TOKEN_PATTERN = /^KGS-\d{8}-\d{4,}$/i;

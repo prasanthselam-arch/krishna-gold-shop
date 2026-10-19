@@ -65,20 +65,9 @@ CREATE TABLE IF NOT EXISTS payments (
   interest_portion REAL NOT NULL,
   principal_portion REAL NOT NULL,
   balance_after REAL NOT NULL,
+  interest_adjustment REAL NOT NULL DEFAULT 0,
   received_at TEXT NOT NULL,
   notes TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS otp_challenges (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  pledge_id INTEGER NOT NULL REFERENCES pledges(id),
-  code_hash TEXT NOT NULL,
-  salt TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  attempts INTEGER NOT NULL DEFAULT 0,
-  consumed_at TEXT,
-  created_at TEXT NOT NULL,
-  delivery TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS releases (
@@ -88,6 +77,7 @@ CREATE TABLE IF NOT EXISTS releases (
   items_json TEXT NOT NULL,
   payment_details_json TEXT NOT NULL,
   otp_verified INTEGER NOT NULL,
+  returned_to TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
 );
 
@@ -139,6 +129,24 @@ function columnExists(table: string, column: string): boolean {
 function migrate() {
   if (!columnExists("users", "must_change_password")) {
     db.exec("ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!columnExists("pledges", "rate_unit")) {
+    db.exec("ALTER TABLE pledges ADD COLUMN rate_unit TEXT NOT NULL DEFAULT 'percent'");
+    db.exec("ALTER TABLE pledges ADD COLUMN rate_amount REAL");
+  }
+  if (!columnExists("payments", "interest_adjustment")) {
+    db.exec("ALTER TABLE payments ADD COLUMN interest_adjustment REAL NOT NULL DEFAULT 0");
+  }
+  // 'renewal' = balance moved into a new loan (no cash changed hands).
+  if (!columnExists("payments", "method")) {
+    db.exec("ALTER TABLE payments ADD COLUMN method TEXT NOT NULL DEFAULT 'cash'");
+  }
+  if (!columnExists("releases", "returned_to")) {
+    db.exec("ALTER TABLE releases ADD COLUMN returned_to TEXT NOT NULL DEFAULT ''");
+  }
+  if (!columnExists("pledges", "renewed_from")) {
+    db.exec("ALTER TABLE pledges ADD COLUMN renewed_from INTEGER REFERENCES pledges(id)");
+    db.exec("ALTER TABLE pledges ADD COLUMN carried_amount REAL NOT NULL DEFAULT 0");
   }
   if (!columnExists("pledges", "partial_month_policy")) {
     db.exec("ALTER TABLE pledges ADD COLUMN partial_month_policy TEXT");

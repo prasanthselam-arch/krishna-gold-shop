@@ -66,7 +66,7 @@ export function SettingsModal({
     <Modal title="Settings" onClose={onClose}>
       <section className="settings-section">
         <h3>Part-month interest rule</h3>
-        <p className="muted">Applies to new pledges only. Existing pledges keep the rule they were created with.</p>
+        <p className="muted">Applies to new registrations only. Existing ones keep the rule they were created with.</p>
         <select
           value={policy}
           onChange={async (e) => {
@@ -74,7 +74,7 @@ export function SettingsModal({
             try {
               await api.saveSettings(v);
               onPolicy(v);
-              notify("ok", "Interest rule saved for new pledges.");
+              notify("ok", "Interest rule saved for new registrations.");
             } catch (err) {
               notify("err", errMsg(err));
             }

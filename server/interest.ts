@@ -27,6 +27,11 @@ function roundMoney(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
 }
 
+/** Interest is always charged in whole rupees (nearest rupee), so every amount due is payable without paise. */
+export function roundRupee(n: number): number {
+  return Math.round(n + 1e-9);
+}
+
 /** Convert configured rate into a monthly decimal rate. */
 function monthlyRate(ratePercent: number, ratePeriod: RatePeriod): number {
   const r = ratePercent / 100;
@@ -79,7 +84,7 @@ export function calculateInterest(input: CalcInput): CalcResult {
     interest = principal * (Math.pow(1 + mRate, elapsed.timeFactor) - 1);
   }
 
-  interest = roundMoney(Math.max(0, interest));
+  interest = roundRupee(Math.max(0, interest));
   return {
     days: elapsed.days,
     completedMonths: elapsed.completedMonths,
@@ -93,6 +98,8 @@ export function calculateInterest(input: CalcInput): CalcResult {
 export interface LedgerPayment {
   date: string;
   amount: number;
+  /** Interest added (+) or waived (−) by the shop at this payment, e.g. when the extra days were rounded. */
+  adjust?: number;
 }
 
 export interface LedgerAllocation {
@@ -118,11 +125,15 @@ export interface LedgerResult {
  * payment clears unpaid interest first, then principal. The partial-month policy
  * is always measured from the pledge date, so a loan with no payments gives
  * exactly the same interest as calculateInterest().
+ *
+ * finalFactor (months since the pledge date) replaces the time at asOf; it is
+ * used when the shop rounds the extra days while taking a payment.
  */
 export function runLedger(
   loan: Omit<CalcInput, "endDate">,
   payments: LedgerPayment[],
   asOf: string,
+  finalFactor?: number,
 ): LedgerResult {
   const mRate = monthlyRate(Number(loan.ratePercent) || 0, loan.ratePeriod);
   let principal = Number(loan.principal) || 0;
@@ -132,23 +143,29 @@ export function runLedger(
   let principalPaid = 0;
   let lastFactor = 0;
 
-  const advanceTo = (date: string) => {
-    const factor = timeInMonths(loan.startDate, date, loan.partialMonthPolicy).timeFactor;
+  const factorAt = (date: string) => timeInMonths(loan.startDate, date, loan.partialMonthPolicy).timeFactor;
+  const advance = (factor: number) => {
     const delta = factor - lastFactor;
     if (delta <= 0) return;
     const add =
       loan.interestType === "simple"
         ? principal * mRate * delta
         : (principal + unpaid) * (Math.pow(1 + mRate, delta) - 1);
-    unpaid = roundMoney(unpaid + add);
-    charged = roundMoney(charged + add);
+    const next = roundRupee(unpaid + add);
+    charged = roundMoney(charged + next - unpaid);
+    unpaid = next;
     lastFactor = factor;
   };
 
   const allocations: LedgerAllocation[] = [];
   for (const p of [...payments].sort((a, b) => a.date.localeCompare(b.date))) {
     if (p.date > asOf) break;
-    advanceTo(p.date);
+    advance(factorAt(p.date));
+    if (p.adjust) {
+      const next = roundMoney(Math.max(0, unpaid + p.adjust));
+      charged = roundMoney(charged + next - unpaid);
+      unpaid = next;
+    }
     const amount = roundMoney(Math.min(p.amount, principal + unpaid));
     const toInterest = roundMoney(Math.min(amount, unpaid));
     const toPrincipal = roundMoney(amount - toInterest);
@@ -163,7 +180,7 @@ export function runLedger(
       balanceAfter: roundMoney(principal + unpaid),
     });
   }
-  advanceTo(asOf);
+  advance(finalFactor ?? factorAt(asOf));
 
   return {
     interestCharged: charged,

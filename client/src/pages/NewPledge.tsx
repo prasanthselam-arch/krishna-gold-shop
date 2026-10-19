@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
-import { api, type InterestType, type Pledge, type RatePeriod } from "../api";
-import { errMsg, grams, inr, num, todayYmd } from "../format";
+import { api, type InterestType, type Pledge, type RatePeriod, type RateUnit } from "../api";
+import { errMsg, grams, inr, num, rupeesInput, todayYmd } from "../format";
 import { PhotoCapture } from "../components/PhotoCapture";
 
 type GoldDraft = { name: string; weight: string; quantity: string };
@@ -24,6 +24,7 @@ export function NewPledge({
   const [jewelPhoto, setJewelPhoto] = useState("");
   const [principal, setPrincipal] = useState("");
   const [rate, setRate] = useState("2");
+  const [unit, setUnit] = useState<RateUnit>("percent");
   const [period, setPeriod] = useState<RatePeriod>("monthly");
   const [type, setType] = useState<InterestType>("simple");
   const [date, setDate] = useState(todayYmd());
@@ -33,8 +34,8 @@ export function NewPledge({
 
   const amount = num(principal);
   const rateN = num(rate);
-  const monthly =
-    Number.isFinite(amount) && Number.isFinite(rateN) ? (amount * (period === "monthly" ? rateN : rateN / 12)) / 100 : NaN;
+  const perPeriod = unit === "rupees" ? rateN : (amount * rateN) / 100;
+  const monthly = Number.isFinite(amount) && Number.isFinite(rateN) ? (period === "monthly" ? perPeriod : perPeriod / 12) : NaN;
   const totalWeight = gold.reduce((s, g) => {
     const w = num(g.weight);
     const q = Number(g.quantity) || 0;
@@ -54,7 +55,11 @@ export function NewPledge({
     }
     if (!jewelPhoto) return "Take a photo of the jewellery.";
     if (!(amount > 0)) return "Enter the loan amount.";
+    if (!Number.isInteger(amount)) return "Loan amount must be in whole rupees (no paise).";
+    if (unit === "rupees" && !Number.isInteger(rateN)) return "Interest amount must be in whole rupees (no paise).";
     if (!(rateN > 0)) return "Enter the interest rate.";
+    if (unit === "percent" && rateN > 100) return "Interest rate looks too high.";
+    if (unit === "rupees" && rateN > amount) return "Interest amount is more than the loan amount.";
     if (!date || date > todayYmd()) return "Pledge date cannot be in the future.";
     return "";
   }
@@ -74,6 +79,7 @@ export function NewPledge({
         pledge_date: date,
         principal: amount,
         interest_rate: rateN,
+        rate_unit: unit,
         rate_period: period,
         interest_type: type,
         notes,
@@ -101,7 +107,7 @@ export function NewPledge({
   return (
     <form className="page new-pledge" onSubmit={submit} noValidate>
       <div className="page-head">
-        <h2>New pledge</h2>
+        <h2>New Registration</h2>
         <span className="token-chip">Next token: {tokenPreview || "…"}</span>
       </div>
 
@@ -186,11 +192,33 @@ export function NewPledge({
         <div className="grid-4">
           <div className="field">
             <label>Loan amount (₹) *</label>
-            <input className="big-input" inputMode="decimal" value={principal} onChange={(e) => setPrincipal(e.target.value)} />
+            <input className="big-input" inputMode="numeric" value={principal} onChange={(e) => setPrincipal(rupeesInput(e.target.value))} />
           </div>
           <div className="field">
-            <label>Interest rate (%) *</label>
-            <input className="big-input" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
+            <label>Interest {unit === "percent" ? "rate (%)" : "amount (₹)"} *</label>
+            <div className="input-unit">
+              <input
+                className="big-input"
+                inputMode={unit === "rupees" ? "numeric" : "decimal"}
+                value={rate}
+                onChange={(e) => setRate(unit === "rupees" ? rupeesInput(e.target.value) : e.target.value)}
+              />
+              <div className="seg" role="group" aria-label="Interest unit">
+                <button type="button" className={unit === "percent" ? "active" : ""} onClick={() => setUnit("percent")}>
+                  %
+                </button>
+                <button
+                  type="button"
+                  className={unit === "rupees" ? "active" : ""}
+                  onClick={() => {
+                    setUnit("rupees");
+                    setRate(rupeesInput(rate));
+                  }}
+                >
+                  ₹
+                </button>
+              </div>
+            </div>
           </div>
           <div className="field">
             <label>Rate is per</label>
@@ -220,16 +248,17 @@ export function NewPledge({
             </div>
           </div>
         </details>
-        {Number.isFinite(monthly) && monthly > 0 && (
+        {Number.isFinite(monthly) && monthly > 0 && amount > 0 && (
           <div className="hint-strip">
-            Interest about <b>{inr.format(monthly)}</b> per month on {inr.format(amount)}
+            Interest <b>{inr.format(monthly)}</b> per month on {inr.format(amount)}
+            {unit === "rupees" && <> (= {Number(((perPeriod / amount) * 100).toFixed(3))}% per {period === "monthly" ? "month" : "year"})</>}
           </div>
         )}
       </section>
 
       {error && <div className="notice err">{error}</div>}
       <button className="btn btn-gold xl" disabled={busy}>
-        {busy ? "Saving…" : "Save pledge & print bill"}
+        {busy ? "Saving…" : "Register & print bill"}
       </button>
     </form>
   );

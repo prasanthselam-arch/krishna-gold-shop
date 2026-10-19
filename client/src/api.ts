@@ -33,6 +33,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type RatePeriod = "monthly" | "annual";
+export type RateUnit = "percent" | "rupees";
 export type InterestType = "simple" | "compound";
 export type Policy = "actual_days" | "thirty_day_month" | "round_up_month";
 export type PhotoKind = "customer" | "jewel" | "release_customer" | "release_jewel";
@@ -51,6 +52,8 @@ export type Payment = {
   interest_portion: number;
   principal_portion: number;
   balance_after: number;
+  interest_adjustment: number;
+  method: "cash" | "renewal";
   received_at: string;
   notes: string;
 };
@@ -60,6 +63,8 @@ export type Photo = { id: number; kind: PhotoKind; created_at: string };
 export type Finance = {
   asOf: string;
   policy: Policy;
+  extraDays: number;
+  adjustment: number;
   calc: { days: number; completedMonths: number; remainingDays: number; interest: number; totalPayable: number };
   totalPaid: number;
   interestPaid: number;
@@ -72,6 +77,8 @@ export type Finance = {
   elapsed: { days: number; completedMonths: number; remainingDays: number };
 };
 
+export type PledgeStatus = "ACTIVE" | "RELEASED" | "RENEWED";
+
 export type Pledge = {
   id: number;
   token: string;
@@ -82,12 +89,19 @@ export type Pledge = {
   pledge_date: string;
   principal: number;
   interest_rate: number;
+  rate_unit: RateUnit;
+  rate_amount: number | null;
   rate_period: RatePeriod;
   interest_type: InterestType;
   partial_month_policy: Policy;
   notes: string;
-  status: "ACTIVE" | "RELEASED";
+  status: PledgeStatus;
   released_at: string | null;
+  carried_amount: number;
+  renewed_from_token: string | null;
+  renewed_to_token: string | null;
+  /** Name of the person the gold was handed to (released pledges only). */
+  returned_to: string;
   gold: GoldItem[];
   payments: Payment[];
   photos: Photo[];
@@ -99,6 +113,7 @@ export type Summary = {
   asOf: string;
   active: number;
   released: number;
+  renewed: number;
   items: number;
   weight: number;
   principalOutstanding: number;
@@ -117,7 +132,33 @@ export type HistoryRow = {
   payments: number;
   interest: number;
   balance: number;
-  status: "ACTIVE" | "RELEASED";
+  status: PledgeStatus;
+};
+
+export type Collections = {
+  from: string;
+  to: string;
+  payments: number;
+  collected: number;
+  interest: number;
+  principal: number;
+  adjustments: number;
+  loansGiven: number;
+  renewals: number;
+  cashGiven: number;
+  goldReturned: number;
+  rows: {
+    id: number;
+    received_at: string;
+    amount: number;
+    interest_portion: number;
+    principal_portion: number;
+    interest_adjustment: number;
+    balance_after: number;
+    token: string;
+    customer_name: string;
+    mobile: string;
+  }[];
 };
 
 export type ReceiptKind = "pledge" | "payment" | "release";
@@ -145,8 +186,6 @@ export type CalcResult = {
   chart: ChartRow[];
 };
 
-export type OtpResult = { sent: boolean; channel: string; message: string; demo: boolean; demoOtp?: string };
-
 export type Me = {
   user: { id: number; username: string };
   shop: string;
@@ -162,11 +201,23 @@ export type NewPledge = {
   pledge_date: string;
   principal: number;
   interest_rate: number;
+  rate_unit: RateUnit;
   rate_period: RatePeriod;
   interest_type: InterestType;
   notes: string;
   gold: GoldItem[];
   photos: { customer: string; jewel: string };
+};
+
+export type Renewal = {
+  extra_amount: number;
+  pledge_date: string;
+  interest_rate: number;
+  rate_unit: RateUnit;
+  rate_period: RatePeriod;
+  interest_type: InterestType;
+  partial_month_policy: Policy;
+  extra_days?: number;
 };
 
 const post = (body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -185,17 +236,21 @@ export const api = {
   previewToken: () => request<{ token: string }>("/api/token/preview"),
   createPledge: (body: NewPledge) => request<Pledge>("/api/pledges", post(body)),
   getPledge: (token: string) => request<Pledge>(`/api/pledges/${tok(token)}`),
-  pay: (token: string, amount: number, notes = "") =>
+  due: (token: string, opts: { extraDays?: number; date?: string } = {}) =>
+    request<Finance>(
+      `/api/pledges/${tok(token)}/due?extra_days=${opts.extraDays ?? ""}&date=${encodeURIComponent(opts.date ?? "")}`,
+    ),
+  pay: (token: string, amount: number, extraDays?: number) =>
     request<{
       applied: number;
       interest_portion: number;
       principal_portion: number;
       remaining_balance: number;
       pledge: Pledge;
-    }>(`/api/pledges/${tok(token)}/payments`, post({ amount, notes })),
-  requestOtp: (token: string) => request<OtpResult>(`/api/pledges/${tok(token)}/otp`, { method: "POST" }),
-  release: (token: string, otp: string, photos: { customer: string; jewel: string }) =>
-    request<Pledge>(`/api/pledges/${tok(token)}/release`, post({ otp, photos })),
+    }>(`/api/pledges/${tok(token)}/payments`, post({ amount, extra_days: extraDays })),
+  renew: (token: string, body: Renewal) => request<Pledge>(`/api/pledges/${tok(token)}/renew`, post(body)),
+  release: (token: string, returnedTo: string, photos: { customer: string; jewel: string }) =>
+    request<Pledge>(`/api/pledges/${tok(token)}/release`, post({ returned_to: returnedTo, photos })),
   receipt: (token: string, kind: ReceiptKind) => request<Receipt>("/api/receipts", post({ token, kind })),
   calcInterest: (body: {
     principal: number;
@@ -214,5 +269,7 @@ export const api = {
   summary: () => request<Summary>("/api/summary"),
   history: (q = "", status = "") =>
     request<HistoryRow[]>(`/api/history?q=${encodeURIComponent(q)}&status=${encodeURIComponent(status)}`),
+  collections: (from: string, to: string) =>
+    request<Collections>(`/api/collections?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   backup: () => request<{ file: string }>("/api/backup", { method: "POST" }),
 };

@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
-import { api, type CalcResult, type InterestType, type Policy, type RatePeriod } from "../api";
+import { api, type CalcResult, type InterestType, type Policy, type RatePeriod, type RateUnit } from "../api";
 import { POLICY_LABEL, errMsg, formatDate, inr, num, todayYmd } from "../format";
 import { Modal } from "./Modal";
 
 export type CalcPrefill = {
   principal: number;
   rate: number;
+  unit: RateUnit;
   period: RatePeriod;
   type: InterestType;
   start: string;
@@ -25,6 +26,7 @@ export function CalculatorModal({
   const [tab, setTab] = useState<"interest" | "dates">("interest");
   const [principal, setPrincipal] = useState(prefill ? String(prefill.principal) : "10000");
   const [rate, setRate] = useState(prefill ? String(prefill.rate) : "2");
+  const [unit, setUnit] = useState<RateUnit>(prefill?.unit ?? "percent");
   const [period, setPeriod] = useState<RatePeriod>(prefill?.period ?? "monthly");
   const [type, setType] = useState<InterestType>(prefill?.type ?? "simple");
   const [policy, setPolicy] = useState<Policy>(prefill?.policy ?? defaultPolicy);
@@ -40,10 +42,21 @@ export function CalculatorModal({
 
   useEffect(() => {
     const p = num(principal);
-    const r = num(rate);
-    if (!Number.isFinite(p) || !Number.isFinite(r) || !start || !end) {
+    const entered = num(rate);
+    if (!Number.isFinite(p) || !Number.isFinite(entered) || !start || !end) {
       setOut(null);
-      setError("Enter amount, rate and both dates.");
+      setError("Enter amount, interest and both dates.");
+      return;
+    }
+    if (unit === "rupees" && !(p > 0)) {
+      setOut(null);
+      setError("Enter the loan amount.");
+      return;
+    }
+    const r = unit === "rupees" ? (entered / p) * 100 : entered;
+    if (r > 100) {
+      setOut(null);
+      setError("Interest is more than the loan amount per period. Please check it.");
       return;
     }
     if (end < start) {
@@ -64,7 +77,7 @@ export function CalculatorModal({
         });
     }, 250);
     return () => window.clearTimeout(t);
-  }, [principal, rate, period, type, start, end, policy]);
+  }, [principal, rate, unit, period, type, start, end, policy]);
 
   useEffect(() => {
     if (!dStart || !dEnd) return;
@@ -96,8 +109,18 @@ export function CalculatorModal({
               <input inputMode="decimal" value={principal} onChange={(e) => setPrincipal(e.target.value)} />
             </div>
             <div className="field">
-              <label>Interest rate (%)</label>
-              <input inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
+              <label>Interest {unit === "percent" ? "rate (%)" : "amount (₹)"}</label>
+              <div className="input-unit">
+                <input inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
+                <div className="seg" role="group" aria-label="Interest unit">
+                  <button type="button" className={unit === "percent" ? "active" : ""} onClick={() => setUnit("percent")}>
+                    %
+                  </button>
+                  <button type="button" className={unit === "rupees" ? "active" : ""} onClick={() => setUnit("rupees")}>
+                    ₹
+                  </button>
+                </div>
+              </div>
             </div>
             <div className="field">
               <label>Rate is per</label>

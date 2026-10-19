@@ -1,6 +1,7 @@
 import { db, getSetting } from "./db.ts";
 import { istYmd, todayYmd } from "./dates.ts";
 import {
+  roundRupee,
   runLedger,
   timeInMonths,
   type InterestType,
@@ -17,12 +18,19 @@ export type PledgeRow = {
   email: string;
   pledge_date: string;
   principal: number;
+  /** Always the effective percentage used for calculation. */
   interest_rate: number;
+  /** "rupees" when the shop entered a fixed ₹ amount per period (kept in rate_amount). */
+  rate_unit: "percent" | "rupees";
+  rate_amount: number | null;
   rate_period: RatePeriod;
   interest_type: InterestType;
   partial_month_policy: PartialMonthPolicy | null;
   notes: string;
-  status: "ACTIVE" | "RELEASED";
+  status: "ACTIVE" | "RELEASED" | "RENEWED";
+  /** Previous loan whose balance was carried into this one. */
+  renewed_from: number | null;
+  carried_amount: number;
   released_at: string | null;
   created_at: string;
   updated_at: string;
@@ -44,6 +52,9 @@ export type PaymentRow = {
   interest_portion: number;
   principal_portion: number;
   balance_after: number;
+  /** Interest added (+) or waived (−) when the extra days were changed for this payment. */
+  interest_adjustment: number;
+  method: "cash" | "renewal";
   received_at: string;
   notes: string;
 };
@@ -93,35 +104,42 @@ export function photosFor(pledgeId: number): Omit<PhotoRow, "file" | "pledge_id"
 
 /** Interest stops at the release date for released pledges. */
 function effectiveAsOf(pledge: PledgeRow, asOf: string): string {
-  if (pledge.status === "RELEASED" && pledge.released_at) {
+  if (pledge.status !== "ACTIVE" && pledge.released_at) {
     const released = istYmd(pledge.released_at);
     return released < asOf ? released : asOf;
   }
   return asOf;
 }
 
-export function settle(pledge: PledgeRow, asOf = todayYmd()) {
+/**
+ * Amounts due on `asOf`. When `extraDays` is given, interest is charged for the
+ * completed months plus that many days instead of the real extra days; the
+ * difference is returned as `adjustment` (negative = waived).
+ */
+export function settle(pledge: PledgeRow, asOf = todayYmd(), extraDays?: number) {
   const until = effectiveAsOf(pledge, asOf);
   const pol = pledgePolicy(pledge);
   const pays = paymentsFor(pledge.id);
-  const ledger = runLedger(
-    {
-      principal: pledge.principal,
-      ratePercent: pledge.interest_rate,
-      ratePeriod: pledge.rate_period,
-      interestType: pledge.interest_type,
-      startDate: pledge.pledge_date,
-      partialMonthPolicy: pol,
-    },
-    pays.map((p) => ({ date: istYmd(p.received_at), amount: p.amount })),
-    until,
-  );
+  const loan = {
+    principal: pledge.principal,
+    ratePercent: pledge.interest_rate,
+    ratePeriod: pledge.rate_period,
+    interestType: pledge.interest_type,
+    startDate: pledge.pledge_date,
+    partialMonthPolicy: pol,
+  };
+  const ledgerPays = pays.map((p) => ({ date: istYmd(p.received_at), amount: p.amount, adjust: p.interest_adjustment || 0 }));
   const elapsed = timeInMonths(pledge.pledge_date, until, pol);
+  const actual = runLedger(loan, ledgerPays, until);
+  const override = extraDays !== undefined && extraDays !== elapsed.remainingDays;
+  const ledger = override ? runLedger(loan, ledgerPays, until, elapsed.completedMonths + extraDays / 30) : actual;
   const totalPaid = money(pays.reduce((s, p) => s + p.amount, 0));
 
   return {
     asOf: until,
     policy: pol,
+    extraDays: extraDays ?? elapsed.remainingDays,
+    adjustment: money(ledger.unpaidInterest - actual.unpaidInterest),
     calc: {
       days: elapsed.days,
       completedMonths: elapsed.completedMonths,
@@ -136,7 +154,7 @@ export function settle(pledge: PledgeRow, asOf = todayYmd()) {
     outstandingPrincipal: ledger.outstandingPrincipal,
     outstanding: ledger.outstanding,
     settled: ledger.outstanding <= 0.009,
-    monthlyInterest: money(
+    monthlyInterest: roundRupee(
       ledger.outstandingPrincipal *
         (pledge.rate_period === "monthly" ? pledge.interest_rate : pledge.interest_rate / 12) /
         100,
@@ -149,8 +167,8 @@ export function settle(pledge: PledgeRow, asOf = todayYmd()) {
   };
 }
 
-export function allocatePayment(pledge: PledgeRow, amount: number, asOf = todayYmd()) {
-  const current = settle(pledge, asOf);
+export function allocatePayment(pledge: PledgeRow, amount: number, extraDays?: number, asOf = todayYmd()) {
+  const current = settle(pledge, asOf, extraDays);
   const pay = money(Math.min(amount, current.outstanding));
   const interestPortion = money(Math.min(pay, current.unpaidInterest));
   const principalPortion = money(pay - interestPortion);
@@ -164,5 +182,22 @@ export function hydrate(pledge: PledgeRow, asOf = todayYmd()) {
   const photos = photosFor(pledge.id);
   const finance = settle(pledge, asOf);
   const total_weight = money(gold.reduce((s, g) => s + g.weight_grams * g.quantity, 0));
-  return { ...pledge, partial_month_policy: finance.policy, gold, payments, photos, finance, total_weight };
+  const tokenOf = (sql: string, id: number) => (db.prepare(sql).get(id) as { token: string } | undefined)?.token ?? null;
+  return {
+    ...pledge,
+    partial_month_policy: finance.policy,
+    gold,
+    payments,
+    photos,
+    finance,
+    total_weight,
+    renewed_from_token: pledge.renewed_from ? tokenOf("SELECT token FROM pledges WHERE id = ?", pledge.renewed_from) : null,
+    renewed_to_token: tokenOf("SELECT token FROM pledges WHERE renewed_from = ? ORDER BY id DESC LIMIT 1", pledge.id),
+    returned_to:
+      pledge.status === "RELEASED"
+        ? ((db.prepare("SELECT returned_to FROM releases WHERE pledge_id = ? ORDER BY id DESC LIMIT 1").get(pledge.id) as
+            | { returned_to: string }
+            | undefined)?.returned_to ?? "")
+        : "",
+  };
 }

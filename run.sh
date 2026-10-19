@@ -41,7 +41,11 @@ env_value() {
 PORT=${PORT:-$(env_value PORT)}
 PORT=${PORT:-8787}
 UI_PORT=${UI_PORT:-5173}
-export PORT UI_PORT
+HTTPS_PORT=${HTTPS_PORT:-$(env_value HTTPS_PORT)}
+HTTPS_PORT=${HTTPS_PORT:-8443}
+DATA_DIR=${DATA_DIR:-$(env_value DATA_DIR)}
+CERT_DIR=${DATA_DIR:-data}/certs
+export PORT UI_PORT HTTPS_PORT
 
 pid()        { [ -f "$PID_FILE" ] && cat "$PID_FILE" || true; }
 is_running() { local p; p=$(pid); [ -n "$p" ] && kill -0 "$p" 2>/dev/null; }
@@ -50,11 +54,42 @@ healthy()    { curl -fsS --max-time 2 "http://127.0.0.1:$PORT/api/health" >/dev/
 port_busy()  { ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; }
 app_url()    { [ "$(mode)" = dev ] && echo "http://localhost:$UI_PORT" || echo "http://localhost:$PORT"; }
 
+https_on() { [ "$HTTPS_PORT" != 0 ] && [ -f "$CERT_DIR/cert.pem" ]; }
+
+lan_ips() { hostname -I 2>/dev/null | tr ' ' '\n' | grep -E '^[0-9]+\.' | grep -v '^127\.' || true; }
+
+# Self-signed certificate so phones/tablets can use the camera over the shop network.
+ensure_cert() {
+  [ "$HTTPS_PORT" = 0 ] && return 0
+  [ -f "$CERT_DIR/cert.pem" ] && [ -f "$CERT_DIR/key.pem" ] && return 0
+  command -v openssl >/dev/null 2>&1 || { warn "openssl missing: HTTPS (camera on phones) disabled."; return 0; }
+  mkdir -p "$CERT_DIR"
+  local san="DNS:localhost,IP:127.0.0.1" ip
+  for ip in $(lan_ips); do san="$san,IP:$ip"; done
+  if openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -subj "/CN=Krishna Gold Shop" \
+      -addext "subjectAltName=$san" -keyout "$CERT_DIR/key.pem" -out "$CERT_DIR/cert.pem" >/dev/null 2>&1; then
+    chmod 600 "$CERT_DIR/key.pem"
+    ok "Created HTTPS certificate ($CERT_DIR)."
+  else
+    warn "Could not create HTTPS certificate; continuing with HTTP only."
+  fi
+}
+
 prepare() {
   ensure_requirements auto
   if [ ! -f .env ]; then
     cp .env.example .env
     warn "Created .env from .env.example. Review it before going live."
+  fi
+  ensure_cert
+}
+
+print_urls() {
+  echo "  Open:   ${B}$(app_url)${N}"
+  if https_on && [ "$(mode)" = prod ]; then
+    echo "  HTTPS:  https://localhost:$HTTPS_PORT  (use this on phones/tablets for the camera)"
+    local ip
+    for ip in $(lan_ips); do echo "          https://$ip:$HTTPS_PORT"; done
   fi
 }
 
@@ -90,6 +125,9 @@ start() {
   if [ "$want" = dev ] && port_busy "$UI_PORT"; then
     die "Port $UI_PORT is already in use. Stop the other program or set UI_PORT."
   fi
+  if [ "$want" = prod ] && [ "$HTTPS_PORT" != 0 ] && port_busy "$HTTPS_PORT"; then
+    die "Port $HTTPS_PORT (HTTPS) is already in use. Stop the other program or set HTTPS_PORT=0 in .env."
+  fi
 
   prepare
   local cmd
@@ -117,8 +155,9 @@ start() {
     fi
     if healthy && { [ "$want" = prod ] || port_busy "$UI_PORT"; }; then
       echo
-      ok "Running (PID $(pid)). Open ${B}$(app_url)${N}"
-      echo "  Logs: ./run.sh logs     Stop: ./run.sh stop"
+      ok "Running (PID $(pid))."
+      print_urls
+      echo "  Logs:   ./run.sh logs     Stop: ./run.sh stop"
       return 0
     fi
     printf "."
@@ -162,7 +201,7 @@ status() {
   if is_running; then
     local up; up=$(ps -o etime= -p "$(pid)" | tr -d ' ')
     ok "Running in $(mode) mode (PID $(pid), up $up)"
-    echo "  URL:    $(app_url)"
+    print_urls
     if healthy; then echo "  Health: ${G}OK${N}"; else echo "  Health: ${R}not responding${N} (see ./run.sh logs)"; fi
     echo "  Logs:   $LOG_FILE"
   elif healthy; then

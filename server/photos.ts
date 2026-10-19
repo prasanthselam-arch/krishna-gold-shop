@@ -38,6 +38,16 @@ export function savePhoto(pledgeId: number, kind: PhotoKind, photo: { bytes: Buf
   );
 }
 
+/** Copies the latest photo of `kind` from one pledge to another (used when a loan is renewed). */
+export function copyPhoto(fromPledgeId: number, toPledgeId: number, kind: PhotoKind) {
+  const row = db
+    .prepare("SELECT id FROM photos WHERE pledge_id = ? AND kind = ? ORDER BY id DESC LIMIT 1")
+    .get(fromPledgeId, kind) as { id: number } | undefined;
+  const src = row ? photoPath(row.id) : null;
+  if (!src) return;
+  savePhoto(toPledgeId, kind, { bytes: fs.readFileSync(src), ext: path.extname(src).slice(1) || "jpg" });
+}
+
 export function photoPath(id: number): string | null {
   const row = db.prepare("SELECT * FROM photos WHERE id = ?").get(id) as PhotoRow | undefined;
   if (!row) return null;
