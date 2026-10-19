@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { api, setUnauthorizedHandler, type Pledge, type Policy, type Receipt } from "./api";
+import { api, setUnauthorizedHandler, type Pledge, type Receipt, type ShopSettings } from "./api";
 import { errMsg } from "./format";
 import { BillPreview } from "./components/BillCards";
 import { CalculatorModal, type CalcPrefill } from "./components/CalculatorModal";
@@ -17,7 +17,16 @@ export function App() {
   const [user, setUser] = useState<string | null>(null);
   const [shop, setShop] = useState("KRISHNA GOLD SHOP");
   const [mustChange, setMustChange] = useState(false);
-  const [policy, setPolicy] = useState<Policy>("actual_days");
+  const [settings, setSettings] = useState<ShopSettings>({
+    shop_name: "KRISHNA GOLD SHOP",
+    partial_month_policy: "actual_days",
+    rupee_basis: 100,
+    default_rate: 2,
+    default_rate_unit: "percent",
+    default_rate_period: "monthly",
+    default_interest_type: "simple",
+    rate_slabs: [],
+  });
   const [tab, setTab] = useState<Tab>("find");
   const [flash, setFlash] = useState<Flash | null>(null);
   const [tokenPreview, setTokenPreview] = useState("");
@@ -40,7 +49,7 @@ export function App() {
     setUser(m.user.username);
     setShop(m.shop);
     setMustChange(m.mustChangePassword);
-    setPolicy(m.settings.partial_month_policy);
+    setSettings(m.settings);
   }, []);
 
   const refresh = useCallback(() => {
@@ -53,6 +62,10 @@ export function App() {
       setUser(null);
       notify("warn", "Session expired. Please sign in again.");
     });
+    fetch("/api/health")
+      .then((r) => r.json())
+      .then((h: { shop?: string }) => h.shop && setShop(h.shop))
+      .catch(() => undefined);
     loadSession()
       .then(refresh)
       .catch(() => setUser(null))
@@ -87,6 +100,7 @@ export function App() {
   if (!user) {
     return (
       <Login
+        shop={shop}
         flash={flash}
         onLogin={async (u, p) => {
           await api.login(u, p);
@@ -143,6 +157,7 @@ export function App() {
           <div hidden={tab !== "new"}>
             <NewPledge
               tokenPreview={tokenPreview}
+              settings={settings}
               onSaved={(p) => {
                 notify("ok", `Registration saved. Token ${p.token}.`);
                 setPledge(p);
@@ -158,13 +173,16 @@ export function App() {
               setPledge={setPledge}
               active={tab === "find"}
               onPrint={(t) => void print(t)}
+              rupeeBasis={settings.rupee_basis}
               onCalc={(p) => {
                 const principal = p.finance.outstandingPrincipal || p.principal;
-                const inRupees = p.rate_unit === "rupees" && p.rate_amount != null && principal === p.principal;
+                const perAmount = p.rate_unit === "rupees" && p.rate_amount != null && p.rate_basis > 0;
+                const fixed = p.rate_unit === "rupees" && p.rate_amount != null && p.rate_basis === 0 && principal === p.principal;
                 setCalc({
                   principal,
-                  rate: inRupees ? p.rate_amount! : p.interest_rate,
-                  unit: inRupees ? "rupees" : "percent",
+                  rate: perAmount || fixed ? p.rate_amount! : p.interest_rate,
+                  unit: perAmount || fixed ? "rupees" : "percent",
+                  basis: perAmount || fixed ? p.rate_basis : settings.rupee_basis,
                   period: p.rate_period,
                   type: p.interest_type,
                   start: p.pledge_date,
@@ -182,7 +200,7 @@ export function App() {
         </main>
       </div>
 
-      {calc !== undefined && <CalculatorModal prefill={calc} defaultPolicy={policy} onClose={() => setCalc(undefined)} />}
+      {calc !== undefined && <CalculatorModal prefill={calc} settings={settings} onClose={() => setCalc(undefined)} />}
       {confirmSignOut && (
         <Modal
           title="Sign out?"
@@ -212,7 +230,15 @@ export function App() {
         </Modal>
       )}
       {settingsOpen && (
-        <SettingsModal policy={policy} onPolicy={setPolicy} onClose={() => setSettingsOpen(false)} notify={notify} />
+        <SettingsModal
+          settings={settings}
+          onSaved={(s) => {
+            setSettings(s);
+            setShop(s.shop_name);
+          }}
+          onClose={() => setSettingsOpen(false)}
+          notify={notify}
+        />
       )}
       {receipt && <BillPreview receipt={receipt} onClose={() => setReceipt(null)} />}
       {mustChange && (
@@ -230,7 +256,7 @@ export function App() {
   );
 }
 
-function Login({ flash, onLogin }: { flash: Flash | null; onLogin: (u: string, p: string) => Promise<void> }) {
+function Login({ shop, flash, onLogin }: { shop: string; flash: Flash | null; onLogin: (u: string, p: string) => Promise<void> }) {
   const [username, setUsername] = useState("owner");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -252,7 +278,7 @@ function Login({ flash, onLogin }: { flash: Flash | null; onLogin: (u: string, p
   return (
     <div className="login">
       <form className="login-card" onSubmit={submit}>
-        <h1>KRISHNA GOLD SHOP</h1>
+        <h1>{shop}</h1>
         <p>Gold loan desk</p>
         {flash && !error && <div className={`notice ${flash.kind}`}>{flash.text}</div>}
         {error && <div className="notice err">{error}</div>}

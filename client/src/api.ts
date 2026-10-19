@@ -36,6 +36,22 @@ export type RatePeriod = "monthly" | "annual";
 export type RateUnit = "percent" | "rupees";
 export type InterestType = "simple" | "compound";
 export type Policy = "actual_days" | "thirty_day_month" | "round_up_month";
+/** A ₹ interest is "₹X for every ₹RupeeBasis of loan"; 0 = a fixed amount on the whole loan. */
+export type RupeeBasis = number;
+
+/** Loans up to `upto` get this interest. */
+export type RateSlab = { upto: number; rate: number; unit: RateUnit };
+
+export type ShopSettings = {
+  shop_name: string;
+  partial_month_policy: Policy;
+  rupee_basis: RupeeBasis;
+  default_rate: number;
+  default_rate_unit: RateUnit;
+  default_rate_period: RatePeriod;
+  default_interest_type: InterestType;
+  rate_slabs: RateSlab[];
+};
 export type PhotoKind = "customer" | "jewel" | "release_customer" | "release_jewel";
 
 export type GoldItem = {
@@ -91,6 +107,8 @@ export type Pledge = {
   interest_rate: number;
   rate_unit: RateUnit;
   rate_amount: number | null;
+  /** rate_amount is per this many rupees of loan (e.g. 100); 0 = fixed amount on the whole loan. */
+  rate_basis: number;
   rate_period: RatePeriod;
   interest_type: InterestType;
   partial_month_policy: Policy;
@@ -190,7 +208,7 @@ export type Me = {
   user: { id: number; username: string };
   shop: string;
   mustChangePassword: boolean;
-  settings: { partial_month_policy: Policy };
+  settings: ShopSettings;
 };
 
 export type NewPledge = {
@@ -202,6 +220,7 @@ export type NewPledge = {
   principal: number;
   interest_rate: number;
   rate_unit: RateUnit;
+  rate_basis: RupeeBasis;
   rate_period: RatePeriod;
   interest_type: InterestType;
   notes: string;
@@ -214,6 +233,7 @@ export type Renewal = {
   pledge_date: string;
   interest_rate: number;
   rate_unit: RateUnit;
+  rate_basis: RupeeBasis;
   rate_period: RatePeriod;
   interest_type: InterestType;
   partial_month_policy: Policy;
@@ -231,8 +251,8 @@ export const api = {
   logout: () => request("/api/logout", { method: "POST" }),
   me: () => request<Me>("/api/me"),
   changePassword: (current: string, next: string) => request("/api/change-password", post({ current, next })),
-  saveSettings: (partial_month_policy: Policy) =>
-    request("/api/settings", { method: "PUT", body: JSON.stringify({ partial_month_policy }) }),
+  saveSettings: (settings: Partial<ShopSettings>) =>
+    request<ShopSettings>("/api/settings", { method: "PUT", body: JSON.stringify(settings) }),
   previewToken: () => request<{ token: string }>("/api/token/preview"),
   createPledge: (body: NewPledge) => request<Pledge>("/api/pledges", post(body)),
   getPledge: (token: string) => request<Pledge>(`/api/pledges/${tok(token)}`),

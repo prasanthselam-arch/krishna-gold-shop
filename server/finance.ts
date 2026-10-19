@@ -20,9 +20,11 @@ export type PledgeRow = {
   principal: number;
   /** Always the effective percentage used for calculation. */
   interest_rate: number;
-  /** "rupees" when the shop entered a fixed ₹ amount per period (kept in rate_amount). */
+  /** "rupees" when the shop entered a ₹ amount per period (kept in rate_amount). */
   rate_unit: "percent" | "rupees";
   rate_amount: number | null;
+  /** ₹ amount is per this many rupees of loan (100 = "₹2 per ₹100"); 0 = on the whole loan. */
+  rate_basis: number;
   rate_period: RatePeriod;
   interest_type: InterestType;
   partial_month_policy: PartialMonthPolicy | null;

@@ -1,8 +1,21 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { api, photoUrl, type Finance, type HistoryRow, type InterestType, type Photo, type Pledge, type Policy, type RatePeriod, type RateUnit } from "../api";
-import { POLICY_LABEL, STATUS_LABEL, TOKEN_PATTERN, errMsg, formatDate, formatDateTime, grams, inr, num, rateLabel, rupeesInput, todayYmd } from "../format";
+import {
+  api,
+  photoUrl,
+  type Finance,
+  type HistoryRow,
+  type InterestType,
+  type Photo,
+  type Pledge,
+  type Policy,
+  type RatePeriod,
+  type RateUnit,
+  type RupeeBasis,
+} from "../api";
+import { POLICY_LABEL, STATUS_LABEL, TOKEN_PATTERN, errMsg, formatDate, formatDateTime, grams, inr, num, ratePercent, rateLabel, rupeesInput, todayYmd } from "../format";
 import { Modal } from "../components/Modal";
 import { PhotoCapture } from "../components/PhotoCapture";
+import { RateField } from "../components/RateField";
 
 const QrScanner = lazy(() => import("../components/QrScanner").then((m) => ({ default: m.QrScanner })));
 
@@ -21,6 +34,7 @@ export function FindPledge({
   onCalc,
   notify,
   onChanged,
+  rupeeBasis,
 }: {
   pledge: Pledge | null;
   setPledge: (p: Pledge | null) => void;
@@ -29,6 +43,7 @@ export function FindPledge({
   onCalc: (p: Pledge) => void;
   notify: (kind: "ok" | "err" | "warn", text: string) => void;
   onChanged: () => void;
+  rupeeBasis: RupeeBasis;
 }) {
   const [query, setQuery] = useState("");
   const [matches, setMatches] = useState<HistoryRow[] | null>(null);
@@ -288,6 +303,7 @@ export function FindPledge({
           {mode === "renew" && pledge.status === "ACTIVE" && (
             <RenewPanel
               pledge={pledge}
+              basis={rupeeBasis}
               onDone={(p) => {
                 setPledge(p);
                 onChanged();
@@ -561,12 +577,21 @@ function PaymentPanel({
  * Top-up on the same items: today's balance is carried into a new loan plus the
  * extra cash given now. The owner can change the date, rate and rules.
  */
+/** Starting rate for the new loan: the old rate, shown the way the shop counts ₹ interest now. */
+function renewRate(pledge: Pledge, basis: RupeeBasis): { unit: RateUnit; rate: string } {
+  if (pledge.rate_unit === "rupees" && basis > 0) return { unit: "rupees", rate: String(Number(((pledge.interest_rate * basis) / 100).toFixed(2))) };
+  if (pledge.rate_unit === "rupees" && pledge.rate_basis === 0 && pledge.rate_amount !== null) return { unit: "rupees", rate: String(pledge.rate_amount) };
+  return { unit: "percent", rate: String(Number(pledge.interest_rate.toFixed(4))) };
+}
+
 function RenewPanel({
   pledge,
+  basis,
   onDone,
   notify,
 }: {
   pledge: Pledge;
+  basis: RupeeBasis;
   onDone: (p: Pledge) => void;
   notify: (kind: "ok" | "err" | "warn", text: string) => void;
 }) {
@@ -574,8 +599,8 @@ function RenewPanel({
   const minDate = [pledge.pledge_date, lastPay ? new Date(lastPay).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" }) : ""].sort().pop()!;
   const [extra, setExtra] = useState("");
   const [date, setDate] = useState(todayYmd());
-  const [unit, setUnit] = useState<RateUnit>(pledge.rate_unit);
-  const [rate, setRate] = useState(String(pledge.rate_unit === "rupees" && pledge.rate_amount !== null ? pledge.rate_amount : Number(pledge.interest_rate.toFixed(4))));
+  const [unit, setUnit] = useState<RateUnit>(() => renewRate(pledge, basis).unit);
+  const [rate, setRate] = useState(() => renewRate(pledge, basis).rate);
   const [period, setPeriod] = useState<RatePeriod>(pledge.rate_period);
   const [type, setType] = useState<InterestType>(pledge.interest_type);
   const [rule, setRule] = useState<Policy>(pledge.partial_month_policy);
@@ -587,14 +612,14 @@ function RenewPanel({
   const carried = due.outstanding;
   const newLoan = Math.round(carried + extraN);
   const rateN = num(rate);
-  const perPeriod = unit === "rupees" ? rateN : (newLoan * rateN) / 100;
+  const perPeriod = (newLoan * ratePercent(unit, rateN, basis, newLoan)) / 100;
   const monthly = period === "monthly" ? perPeriod : perPeriod / 12;
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     if (!(newLoan > 0)) return notify("err", "Enter the extra amount to give.");
     if (!(rateN > 0)) return notify("err", "Enter the interest rate.");
-    if (unit === "rupees" && !Number.isInteger(rateN)) return notify("err", "Interest amount must be in whole rupees.");
+    if (unit === "rupees" && basis === 0 && !Number.isInteger(rateN)) return notify("err", "Interest amount must be in whole rupees.");
     if (!window.confirm(`Close ${pledge.token} and create a new loan of ${inr.format(newLoan)}?\nGive the customer ${inr.format(extraN)} now.`)) return;
     setBusy(true);
     try {
@@ -604,6 +629,7 @@ function RenewPanel({
           pledge_date: date,
           interest_rate: rateN,
           rate_unit: unit,
+          rate_basis: basis,
           rate_period: period,
           interest_type: type,
           partial_month_policy: rule,
@@ -642,32 +668,7 @@ function RenewPanel({
               }}
             />
           </div>
-          <div className="field">
-            <label>Interest {unit === "percent" ? "rate (%)" : "amount (₹)"}</label>
-            <div className="input-unit">
-              <input
-                className="big-input"
-                inputMode={unit === "rupees" ? "numeric" : "decimal"}
-                value={rate}
-                onChange={(e) => setRate(unit === "rupees" ? rupeesInput(e.target.value) : e.target.value)}
-              />
-              <div className="seg" role="group" aria-label="Interest unit">
-                <button type="button" className={unit === "percent" ? "active" : ""} onClick={() => setUnit("percent")}>
-                  %
-                </button>
-                <button
-                  type="button"
-                  className={unit === "rupees" ? "active" : ""}
-                  onClick={() => {
-                    setUnit("rupees");
-                    setRate(rupeesInput(rate));
-                  }}
-                >
-                  ₹
-                </button>
-              </div>
-            </div>
-          </div>
+          <RateField unit={unit} rate={rate} basis={basis} onUnit={setUnit} onRate={setRate} big />
           <div className="field">
             <label>Rate is per</label>
             <select value={period} onChange={(e) => setPeriod(e.target.value as RatePeriod)}>

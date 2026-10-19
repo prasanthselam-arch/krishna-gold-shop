@@ -142,6 +142,8 @@ const pledgeSchema = z.object({
     .positive("Interest must be more than 0.")
     .max(1e9, "Interest looks too high."),
   rate_unit: z.enum(["percent", "rupees"]).optional().default("percent"),
+  /** A ₹ rate is per this many rupees of loan (0 = whole loan); defaults to the shop setting. */
+  rate_basis: z.number().int().min(0).max(1e7).optional(),
   rate_period: z.enum(["monthly", "annual"]),
   interest_type: z.enum(["simple", "compound"]),
   notes: z.string().max(2000).optional().default(""),
@@ -216,11 +218,7 @@ app.get("/api/me", requireAuth, (req, res) => {
     user,
     shop: SHOP(),
     mustChangePassword: row.must_change_password === 1,
-    settings: {
-      partial_month_policy: policy(),
-      timezone: "Asia/Kolkata",
-      currency: "INR",
-    },
+    settings: { ...shopSettings(), timezone: "Asia/Kolkata", currency: "INR" },
   });
 });
 
@@ -255,47 +253,143 @@ app.post("/api/change-password", requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+/** ₹ rates are "₹X for every ₹basis of loan"; 0 = a fixed amount on the whole loan. */
+const rupeeBasisField = z
+  .number({ invalid_type_error: "Enter how many rupees the ₹ interest is counted on." })
+  .int("The amount the ₹ interest is counted on must be whole rupees.")
+  .min(0)
+  .max(1e7, "The amount the ₹ interest is counted on looks too large.");
+
+const rateUnitField = z.enum(["percent", "rupees"]);
+const positiveRate = (what: string) =>
+  z.number({ invalid_type_error: `Enter the ${what}.` }).positive(`The ${what} must be more than 0.`).max(1e9);
+
+/** Interest by loan amount: loans up to `upto` get this rate. */
+const slabSchema = z.object({
+  upto: z
+    .number({ invalid_type_error: "Enter the loan amount for each interest slab." })
+    .int("Slab amounts must be whole rupees.")
+    .positive("Slab amounts must be more than ₹0.")
+    .max(1e9),
+  rate: positiveRate("interest for each slab"),
+  unit: rateUnitField,
+});
+
+const settingsSchema = z.object({
+  shop_name: z.string().trim().min(2, "Enter the shop name.").max(60, "Shop name is too long."),
+  partial_month_policy: z.enum(["actual_days", "thirty_day_month", "round_up_month"]),
+  rupee_basis: rupeeBasisField,
+  default_rate: positiveRate("default interest"),
+  default_rate_unit: rateUnitField,
+  default_rate_period: z.enum(["monthly", "annual"]),
+  default_interest_type: z.enum(["simple", "compound"]),
+  rate_slabs: z
+    .array(slabSchema)
+    .max(20, "Use at most 20 interest slabs.")
+    .refine((s) => s.every((x, i) => i === 0 || x.upto > s[i - 1].upto), "Slab amounts must go up from one row to the next."),
+});
+type ShopSettings = z.infer<typeof settingsSchema>;
+
+function storedBasis(v: string): number {
+  if (v === "per100") return 100;
+  if (v === "loan") return 0;
+  return v === "" || !Number.isFinite(Number(v)) ? 100 : Number(v);
+}
+
+function storedSlabs(v: string): unknown {
+  try {
+    return v ? JSON.parse(v) : [];
+  } catch {
+    return [];
+  }
+}
+
+function shopSettings(): ShopSettings {
+  const fallback: ShopSettings = {
+    shop_name: SHOP(),
+    partial_month_policy: policy(),
+    rupee_basis: 100,
+    default_rate: 2,
+    default_rate_unit: "percent",
+    default_rate_period: "monthly",
+    default_interest_type: "simple",
+    rate_slabs: [],
+  };
+  const read = {
+    shop_name: fallback.shop_name,
+    partial_month_policy: fallback.partial_month_policy,
+    rupee_basis: storedBasis(getSetting("rupee_basis")),
+    default_rate: Number(getSetting("default_rate")) || fallback.default_rate,
+    default_rate_unit: getSetting("default_rate_unit") || fallback.default_rate_unit,
+    default_rate_period: getSetting("default_rate_period") || fallback.default_rate_period,
+    default_interest_type: getSetting("default_interest_type") || fallback.default_interest_type,
+    rate_slabs: storedSlabs(getSetting("rate_slabs")),
+  };
+  const out = { ...fallback };
+  // Field by field, so one bad stored value does not reset everything else.
+  for (const k of Object.keys(fallback) as (keyof ShopSettings)[]) {
+    const r = settingsSchema.shape[k].safeParse(read[k]);
+    if (r.success) (out as Record<string, unknown>)[k] = r.data;
+  }
+  return out;
+}
+
+/** Checks a rate the way a registration would, on a sample loan amount. */
+function rateProblem(label: string, unit: "percent" | "rupees", value: number, s: ShopSettings, sample: number): string | null {
+  const r = resolveRate(sample, unit, value, s.default_rate_period, s.rupee_basis);
+  return "error" in r ? `${label}: ${r.error}` : null;
+}
+
 app.put("/api/settings", requireAuth, (req, res) => {
   const user = userOf(req);
-  const parsed = z
-    .object({
-      partial_month_policy: z.enum(["actual_days", "thirty_day_month", "round_up_month"]),
-    })
-    .safeParse(req.body);
+  const parsed = settingsSchema.partial().safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Invalid settings." });
+    res.status(400).json({ error: firstIssue(parsed.error, "Invalid settings.") });
     return;
   }
-  setSetting("partial_month_policy", parsed.data.partial_month_policy);
-  audit(user.id, "update_settings", "settings", "partial_month_policy", parsed.data);
-  res.json({ partial_month_policy: parsed.data.partial_month_policy });
+  const next = { ...shopSettings(), ...parsed.data };
+  const problem =
+    next.rate_slabs.map((s) => rateProblem(`Slab up to ₹${s.upto}`, s.unit, s.rate, next, s.upto)).find(Boolean) ||
+    rateProblem("Default interest", next.default_rate_unit, next.default_rate, next, 1e9);
+  if (problem) {
+    res.status(400).json({ error: problem });
+    return;
+  }
+  for (const [k, v] of Object.entries(parsed.data)) setSetting(k, typeof v === "object" ? JSON.stringify(v) : String(v));
+  audit(user.id, "update_settings", "settings", "shop", parsed.data);
+  res.json(shopSettings());
 });
 
 app.get("/api/token/preview", requireAuth, (_req, res) => {
   res.json({ token: nextToken() });
 });
 
-/** Turns the entered rate (% or ₹ per period) into the effective percentage stored on the pledge. */
+/**
+ * Turns the entered rate into the effective percentage stored on the pledge.
+ * A ₹ rate is "₹value for every ₹basis of loan" (₹2 per ₹100 = 2%), or with basis 0
+ * a fixed amount on the whole loan.
+ */
 function resolveRate(
   principal: number,
   unit: "percent" | "rupees",
   value: number,
   period: "monthly" | "annual",
-): { effectiveRate: number; rateAmount: number | null } | { error: string } {
-  if (unit === "rupees" && !Number.isInteger(value)) {
-    return { error: "Interest amount must be in whole rupees (no paise)." };
+  basis: number,
+): { effectiveRate: number; rateAmount: number | null; rateBasis: number } | { error: string } {
+  const per = period === "monthly" ? "month" : "year";
+  if (unit === "percent") {
+    return value > 100 ? { error: "Interest rate looks too high." } : { effectiveRate: value, rateAmount: null, rateBasis: 0 };
   }
-  const rateAmount = unit === "rupees" ? money(value) : null;
-  const effectiveRate = rateAmount === null ? value : (rateAmount / principal) * 100;
-  if (effectiveRate > 100) {
-    return {
-      error:
-        rateAmount === null
-          ? "Interest rate looks too high."
-          : `₹${rateAmount} per ${period === "monthly" ? "month" : "year"} is more than the loan amount. Please check it.`,
-    };
+  if (basis > 0) {
+    if (Math.abs(Math.round(value * 100) - value * 100) > 1e-6) return { error: `Interest per ₹${basis} can have at most 2 decimals (e.g. 1.50).` };
+    const effectiveRate = (value / basis) * 100;
+    if (effectiveRate > 100) return { error: `₹${value} per ₹${basis} per ${per} looks too high. Please check it.` };
+    return { effectiveRate, rateAmount: money(value), rateBasis: basis };
   }
-  return { effectiveRate, rateAmount };
+  if (!Number.isInteger(value)) return { error: "Interest amount must be in whole rupees (no paise)." };
+  const effectiveRate = (value / principal) * 100;
+  if (effectiveRate > 100) return { error: `₹${value} per ${per} is more than the loan amount. Please check it.` };
+  return { effectiveRate, rateAmount: value, rateBasis: 0 };
 }
 
 app.post("/api/pledges", requireAuth, (req, res) => {
@@ -316,12 +410,12 @@ app.post("/api/pledges", requireAuth, (req, res) => {
     return;
   }
   const principal = money(d.principal);
-  const rate = resolveRate(principal, d.rate_unit, d.interest_rate, d.rate_period);
+  const rate = resolveRate(principal, d.rate_unit, d.interest_rate, d.rate_period, d.rate_basis ?? shopSettings().rupee_basis);
   if ("error" in rate) {
     res.status(400).json({ error: rate.error });
     return;
   }
-  const { effectiveRate, rateAmount } = rate;
+  const { effectiveRate, rateAmount, rateBasis } = rate;
 
   let customerPhoto, jewelPhoto;
   try {
@@ -342,9 +436,9 @@ app.post("/api/pledges", requireAuth, (req, res) => {
       .prepare(
         `INSERT INTO pledges (
           token, customer_name, additional_name, mobile, email, pledge_date, principal,
-          interest_rate, rate_unit, rate_amount, rate_period, interest_type, partial_month_policy, notes,
+          interest_rate, rate_unit, rate_amount, rate_basis, rate_period, interest_type, partial_month_policy, notes,
           status, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?)`,
       )
       .run(
         token,
@@ -357,6 +451,7 @@ app.post("/api/pledges", requireAuth, (req, res) => {
         effectiveRate,
         d.rate_unit,
         rateAmount,
+        rateBasis,
         d.rate_period,
         d.interest_type,
         policy(),
@@ -473,6 +568,7 @@ app.post("/api/pledges/:token/renew", requireAuth, (req, res) => {
         .positive("Interest must be more than 0.")
         .max(1e9),
       rate_unit: z.enum(["percent", "rupees"]).optional().default("percent"),
+      rate_basis: z.number().int().min(0).max(1e7).optional(),
       rate_period: z.enum(["monthly", "annual"]),
       interest_type: z.enum(["simple", "compound"]),
       partial_month_policy: z.enum(["actual_days", "thirty_day_month", "round_up_month"]).optional(),
@@ -508,7 +604,7 @@ app.post("/api/pledges/:token/renew", requireAuth, (req, res) => {
     res.status(400).json({ error: "Nothing is due and no extra amount was entered. Enter the amount to give." });
     return;
   }
-  const rate = resolveRate(principal, d.rate_unit, d.interest_rate, d.rate_period);
+  const rate = resolveRate(principal, d.rate_unit, d.interest_rate, d.rate_period, d.rate_basis ?? shopSettings().rupee_basis);
   if ("error" in rate) {
     res.status(400).json({ error: rate.error });
     return;
@@ -522,9 +618,9 @@ app.post("/api/pledges/:token/renew", requireAuth, (req, res) => {
       .prepare(
         `INSERT INTO pledges (
           token, customer_name, additional_name, mobile, email, pledge_date, principal,
-          interest_rate, rate_unit, rate_amount, rate_period, interest_type, partial_month_policy, notes,
+          interest_rate, rate_unit, rate_amount, rate_basis, rate_period, interest_type, partial_month_policy, notes,
           status, renewed_from, carried_amount, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)`,
       )
       .run(
         token,
@@ -537,6 +633,7 @@ app.post("/api/pledges/:token/renew", requireAuth, (req, res) => {
         rate.effectiveRate,
         d.rate_unit,
         rate.rateAmount,
+        rate.rateBasis,
         d.rate_period,
         d.interest_type,
         d.partial_month_policy ?? pledgePolicy(old),

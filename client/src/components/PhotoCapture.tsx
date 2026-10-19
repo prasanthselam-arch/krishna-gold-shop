@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Modal } from "./Modal";
+import { cameraError, cameraSupported, listCameras, openCamera, startVideo, stopStream } from "../camera";
 
 const MAX_SIDE = 1024;
 const QUALITY = 0.8;
@@ -29,7 +30,7 @@ function fileToJpeg(file: File): Promise<string> {
   });
 }
 
-export const cameraSupported = () => window.isSecureContext && !!navigator.mediaDevices?.getUserMedia;
+export { cameraSupported };
 
 function CameraModal({
   title,
@@ -44,46 +45,41 @@ function CameraModal({
 }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [error, setError] = useState("");
+  const [ready, setReady] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState("");
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     let stream: MediaStream | null = null;
     let cancelled = false;
-    const video: MediaTrackConstraints = deviceId
-      ? { deviceId: { exact: deviceId }, width: { ideal: 1280 } }
-      : { facingMode: facing, width: { ideal: 1280 } };
-    navigator.mediaDevices
-      .getUserMedia({ video, audio: false })
-      .then(async (s) => {
-        if (cancelled) {
-          s.getTracks().forEach((t) => t.stop());
-          return;
-        }
-        stream = s;
-        if (videoRef.current) {
-          videoRef.current.srcObject = s;
-          await videoRef.current.play().catch(() => undefined);
-        }
-        const all = await navigator.mediaDevices.enumerateDevices();
-        if (!cancelled) setDevices(all.filter((d) => d.kind === "videoinput"));
-      })
-      .catch((e: Error) =>
-        setError(
-          e.name === "NotAllowedError"
-            ? "Camera permission was denied. Allow camera access in the browser address bar."
-            : "No camera found. Use 'Upload photo' instead.",
-        ),
-      );
+    setReady(false);
+    setError("");
+    (async () => {
+      try {
+        stream = await openCamera(facing, deviceId);
+        if (cancelled) return stopStream(stream);
+        await startVideo(videoRef.current!, stream);
+        if (cancelled) return;
+        setReady(!!videoRef.current?.videoWidth);
+        if (!videoRef.current?.videoWidth) setError("The camera started but shows no picture. Press Try again or pick another camera.");
+        listCameras().then((d) => !cancelled && setDevices(d));
+      } catch (e) {
+        if (!cancelled) setError(cameraError(e));
+      }
+    })();
     return () => {
       cancelled = true;
-      stream?.getTracks().forEach((t) => t.stop());
+      stopStream(stream);
     };
-  }, [facing, deviceId]);
+  }, [facing, deviceId, attempt]);
 
   function capture() {
     const v = videoRef.current;
-    if (!v || !v.videoWidth) return;
+    if (!v?.videoWidth) {
+      setError("The camera is not ready yet. Wait a second and press Take photo again.");
+      return;
+    }
     onCapture(toJpeg(v, v.videoWidth, v.videoHeight));
     onClose();
   }
@@ -97,17 +93,26 @@ function CameraModal({
           <button type="button" className="btn btn-ghost" onClick={onClose}>
             Cancel
           </button>
-          <button type="button" className="btn btn-gold" onClick={capture} disabled={!!error}>
-            Take photo
+          <button type="button" className="btn btn-gold" onClick={capture} disabled={!ready}>
+            {ready || error ? "Take photo" : "Starting camera…"}
           </button>
         </>
       }
     >
-      {error ? (
-        <div className="notice err">{error}</div>
-      ) : (
-        <video ref={videoRef} className="camera-view" playsInline muted />
+      {error && (
+        <div className="notice err">
+          {error}
+          <div>
+            <button type="button" className="btn btn-gold" onClick={() => setAttempt((n) => n + 1)}>
+              Try again
+            </button>
+          </div>
+        </div>
       )}
+      <div className="scan-frame" hidden={!!error}>
+        <video ref={videoRef} className={`camera-view ${facing === "user" ? "mirror" : ""}`} playsInline muted autoPlay />
+        {!ready && <div className="scan-status">Starting camera…</div>}
+      </div>
       {devices.length > 1 && (
         <div className="field" style={{ marginTop: 8 }}>
           <label>Camera</label>
@@ -168,7 +173,7 @@ export function PhotoCapture({
         ref={fileRef}
         type="file"
         accept="image/*"
-        capture={facing}
+        {...(canUseCamera ? {} : { capture: facing })}
         hidden
         onChange={async (e) => {
           const file = e.target.files?.[0];

@@ -1,4 +1,4 @@
-import { ApiError, type Pledge, type PledgeStatus, type Policy } from "./api";
+import { ApiError, type Pledge, type PledgeStatus, type Policy, type RateSlab, type RateUnit, type RupeeBasis, type ShopSettings } from "./api";
 
 export const inr = new Intl.NumberFormat("en-IN", {
   style: "currency",
@@ -16,6 +16,36 @@ export const STATUS_LABEL: Record<PledgeStatus, string> = {
 /** Whole rupees only: keeps digits, drops paise and anything else typed. */
 export function rupeesInput(v: string): string {
   return v.split(".")[0].replace(/\D/g, "");
+}
+
+/** Rupees with up to 2 decimals (paise), e.g. "1.50". */
+export function paiseInput(v: string): string {
+  const [whole, ...rest] = v.replace(/[^\d.]/g, "").split(".");
+  return rest.length ? `${whole}.${rest.join("").slice(0, 2)}` : whole;
+}
+
+/** ₹ amount with paise shown only when there are any: ₹2, ₹1.50. */
+export function rupeeRate(n: number): string {
+  return Number.isInteger(n) ? inr.format(n) : `₹${n.toFixed(2)}`;
+}
+
+/** Interest per period as a percentage of the loan. NaN when it cannot be worked out yet. */
+export function ratePercent(unit: RateUnit, value: number, basis: RupeeBasis, principal: number): number {
+  if (unit === "percent") return value;
+  if (basis > 0) return (value / basis) * 100;
+  return principal > 0 ? (value / principal) * 100 : NaN;
+}
+
+/** "₹2 per ₹100", "2%", "₹1,000" (fixed on the whole loan). */
+export function rateText(unit: RateUnit, value: number, basis: RupeeBasis): string {
+  if (unit === "percent") return `${Number(value.toFixed(4))}%`;
+  return basis > 0 ? `${rupeeRate(value)} per ${inr.format(basis)}` : inr.format(value);
+}
+
+/** The interest the owner set for this loan amount (Settings → Configuration). */
+export function suggestedRate(s: ShopSettings, principal: number): { unit: RateUnit; rate: number; slab: RateSlab | null } {
+  const slab = principal > 0 ? (s.rate_slabs.find((x) => principal <= x.upto) ?? null) : null;
+  return slab ? { unit: slab.unit, rate: slab.rate, slab } : { unit: s.default_rate_unit, rate: s.default_rate, slab: null };
 }
 
 export function formatDate(ymd: string): string {
@@ -68,11 +98,13 @@ export const POLICY_LABEL: Record<Policy, string> = {
   round_up_month: "Extra days count as a full month",
 };
 
-export function rateLabel(p: Pick<Pledge, "interest_rate" | "rate_unit" | "rate_amount" | "rate_period" | "interest_type">): string {
+export function rateLabel(
+  p: Pick<Pledge, "interest_rate" | "rate_unit" | "rate_amount" | "rate_basis" | "rate_period" | "interest_type">,
+): string {
   const per = p.rate_period === "monthly" ? "month" : "year";
   const rate =
     p.rate_unit === "rupees" && p.rate_amount != null
-      ? `${inr.format(p.rate_amount)} / ${per}`
+      ? `${rateText("rupees", p.rate_amount, p.rate_basis)} / ${per}`
       : `${Number(p.interest_rate.toFixed(4))}% / ${per}`;
   return p.interest_type === "compound" ? `${rate} (compound)` : rate;
 }

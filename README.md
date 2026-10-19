@@ -39,7 +39,8 @@ Forgot it? Run `./run.sh reset-password`.
 
 1. **New Registration**: fill customer details, take the customer photo, add gold items, take
    the jewellery photo, enter the loan amount and the interest per month, either in **%** or in
-   **₹**, then click **Register & print bill**.
+   **₹ per ₹100** (filled in from the owner's slabs in Settings → Configuration as the loan amount
+   is typed), then click **Register & print bill**.
    Two ID-card size bills are printed: *Customer copy* and *Shop copy*.
 2. **Find / Pay / Return**: scan the QR code on the customer's bill (**Scan QR** uses the
    camera), or type the token, name or mobile number.
@@ -85,22 +86,47 @@ accept the "not secure / advanced → proceed" warning once, and the camera work
 and QR scanning. When the scanner is opened over plain `http://` it shows an
 **Open secure page** button that goes to the right address.
 
-Without the live camera, **Take photo** (phone camera app) or **Upload photo** (gallery or
-file) still work: the photo is searched at several sizes and positions, so the QR code
-does not need to fill the picture. Phones with a built-in QR detector (Android Chrome,
-Safari) use it automatically. If several cameras exist, pick one in the scanner; phones
-with a flash get a **Light on** button.
+**Scanning a bill QR code**
+
+- Hold the QR code inside the square, about 10–15 cm away. It is captured automatically:
+  the frame turns green with **✓ QR found** and the registration opens. No button press is needed.
+- Every camera frame is tried with different zoom levels and clean-up filters (glare and
+  light-reflection removal, uneven-light correction, contrast boost, sharpening, mirrored
+  images), so most glare is corrected automatically. If a reflection completely hides part
+  of the code, tilt the bill slightly.
+- **Capture now** takes a full-resolution still and searches it thoroughly (progress is shown).
+- **Upload photo** reads a photo from the gallery or a file with the same thorough search:
+  the whole photo, the centre and overlapping tiles at several sizes, each with the glare
+  and lighting filters, then mirrored. The QR code does not need to fill the picture.
+- A QR code that is not a shop bill (for example a UPI code) is ignored, with a message.
+- Without the live camera (plain `http://`), **Take photo** opens the phone camera app.
+- Phones with a built-in QR detector (Android Chrome, Safari) use it as well. If several
+  cameras exist, pick one in the scanner; phones with a flash get a **Light on** button.
+- Bills print the QR code at 20 mm with high error correction (about 25% of the code can be
+  damaged or hidden by glare and it still reads). Reprint older bills for best results.
+- If a bill is torn or badly creased, type the token printed under the QR code, or search by
+  mobile number or name.
 
 ## Interest rules
 
-- Interest per month can be a percentage or a fixed rupee amount. A rupee amount is turned
-  into the equivalent percentage of the loan amount, so the first month costs exactly that amount.
+- Interest can be entered as a percentage or in rupees. A rupee rate is counted **for every
+  ₹100 of loan** unless the owner changes it: ₹2 per ₹100 a month on ₹50,000 is ₹1,000 a month
+  (the same as 2%). Paise are allowed in this rate, e.g. ₹1.50 per ₹100.
+- Everything about interest is set by the owner in **Settings → Configuration**:
+  - **How interest in ₹ is counted**: for every ₹100, ₹1,000 or any amount, or a fixed ₹ amount
+    on the whole loan (whole rupees only).
+  - **Interest by loan amount** (slabs), e.g. up to ₹50,000 → ₹2 per ₹100, up to ₹2,00,000 →
+    ₹1.50 per ₹100. New Registration fills in the interest from the slab the loan amount fits
+    in; the owner can still type a different rate for any customer.
+  - **Default interest** for loans above the slabs (% or ₹, per month or year, simple or compound).
+  - **Part-month interest** rule, and the **shop name** shown on bills and screens.
+- The Backup and Password tabs are in the same Settings window.
 - Interest is always charged in whole rupees (nearest rupee), so every amount due can be
   paid without paise. Loan amounts and payments must be whole rupees.
 - Interest accrues only on the loan amount still outstanding; payments clear interest first.
 - Once fully paid, no further interest is added. Closed registrations are frozen at the release date.
-- The part-month rule (Settings) applies to new registrations; each one keeps the rule it was
-  created with.
+- Settings apply to new registrations only; each registration keeps the rate and rules it was
+  created with (older ₹ registrations stay as a fixed amount on the whole loan).
 
 ## Data and backups
 

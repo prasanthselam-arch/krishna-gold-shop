@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from "react";
-import { api, type InterestType, type Pledge, type RatePeriod, type RateUnit } from "../api";
-import { errMsg, grams, inr, num, rupeesInput, todayYmd } from "../format";
+import { useEffect, useState, type FormEvent } from "react";
+import { api, type InterestType, type Pledge, type RatePeriod, type RateUnit, type ShopSettings } from "../api";
+import { errMsg, grams, inr, num, ratePercent, rateText, rupeesInput, suggestedRate, todayYmd } from "../format";
 import { PhotoCapture } from "../components/PhotoCapture";
+import { RateField, cleanRate } from "../components/RateField";
 
 type GoldDraft = { name: string; weight: string; quantity: string };
 const emptyGold = (): GoldDraft => ({ name: "", weight: "", quantity: "1" });
@@ -10,11 +11,14 @@ const ITEM_NAMES = ["Chain", "Necklace", "Ring", "Bangle", "Bracelet", "Earrings
 
 export function NewPledge({
   tokenPreview,
+  settings,
   onSaved,
 }: {
   tokenPreview: string;
+  settings: ShopSettings;
   onSaved: (p: Pledge) => void;
 }) {
+  const basis = settings.rupee_basis;
   const [name, setName] = useState("");
   const [relation, setRelation] = useState("");
   const [mobile, setMobile] = useState("");
@@ -23,18 +27,39 @@ export function NewPledge({
   const [gold, setGold] = useState<GoldDraft[]>([emptyGold()]);
   const [jewelPhoto, setJewelPhoto] = useState("");
   const [principal, setPrincipal] = useState("");
-  const [rate, setRate] = useState("2");
-  const [unit, setUnit] = useState<RateUnit>("percent");
-  const [period, setPeriod] = useState<RatePeriod>("monthly");
-  const [type, setType] = useState<InterestType>("simple");
+  const [rate, setRate] = useState(() => cleanRate(String(settings.default_rate), settings.default_rate_unit, basis));
+  const [unit, setUnit] = useState<RateUnit>(settings.default_rate_unit);
+  /** Once the owner types a rate, the loan amount no longer changes it. */
+  const [ownRate, setOwnRate] = useState(false);
+  const [period, setPeriod] = useState<RatePeriod>(settings.default_rate_period);
+  const [type, setType] = useState<InterestType>(settings.default_interest_type);
   const [date, setDate] = useState(todayYmd());
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const amount = num(principal);
+  const suggestion = suggestedRate(settings, amount);
+  const suggestionText = rateText(suggestion.unit, suggestion.rate, basis);
+
+  function applySuggestion() {
+    setUnit(suggestion.unit);
+    setRate(cleanRate(String(suggestion.rate), suggestion.unit, basis));
+    setOwnRate(false);
+  }
+
+  useEffect(() => {
+    setPeriod(settings.default_rate_period);
+    setType(settings.default_interest_type);
+    setOwnRate(false);
+  }, [settings]);
+  useEffect(() => {
+    if (!ownRate) applySuggestion();
+  }, [ownRate, suggestion.unit, suggestion.rate, basis]);
+
   const rateN = num(rate);
-  const perPeriod = unit === "rupees" ? rateN : (amount * rateN) / 100;
+  const percent = ratePercent(unit, rateN, basis, amount);
+  const perPeriod = (amount * percent) / 100;
   const monthly = Number.isFinite(amount) && Number.isFinite(rateN) ? (period === "monthly" ? perPeriod : perPeriod / 12) : NaN;
   const totalWeight = gold.reduce((s, g) => {
     const w = num(g.weight);
@@ -56,10 +81,9 @@ export function NewPledge({
     if (!jewelPhoto) return "Take a photo of the jewellery.";
     if (!(amount > 0)) return "Enter the loan amount.";
     if (!Number.isInteger(amount)) return "Loan amount must be in whole rupees (no paise).";
-    if (unit === "rupees" && !Number.isInteger(rateN)) return "Interest amount must be in whole rupees (no paise).";
+    if (unit === "rupees" && basis === 0 && !Number.isInteger(rateN)) return "Interest amount must be in whole rupees (no paise).";
     if (!(rateN > 0)) return "Enter the interest rate.";
-    if (unit === "percent" && rateN > 100) return "Interest rate looks too high.";
-    if (unit === "rupees" && rateN > amount) return "Interest amount is more than the loan amount.";
+    if (percent > 100) return unit === "percent" ? "Interest rate looks too high." : "Interest is more than the loan amount. Please check it.";
     if (!date || date > todayYmd()) return "Pledge date cannot be in the future.";
     return "";
   }
@@ -80,6 +104,7 @@ export function NewPledge({
         principal: amount,
         interest_rate: rateN,
         rate_unit: unit,
+        rate_basis: basis,
         rate_period: period,
         interest_type: type,
         notes,
@@ -96,6 +121,9 @@ export function NewPledge({
       setPrincipal("");
       setNotes("");
       setDate(todayYmd());
+      setPeriod(settings.default_rate_period);
+      setType(settings.default_interest_type);
+      setOwnRate(false);
       onSaved(created);
     } catch (err) {
       setError(errMsg(err));
@@ -194,31 +222,30 @@ export function NewPledge({
             <label>Loan amount (₹) *</label>
             <input className="big-input" inputMode="numeric" value={principal} onChange={(e) => setPrincipal(rupeesInput(e.target.value))} />
           </div>
-          <div className="field">
-            <label>Interest {unit === "percent" ? "rate (%)" : "amount (₹)"} *</label>
-            <div className="input-unit">
-              <input
-                className="big-input"
-                inputMode={unit === "rupees" ? "numeric" : "decimal"}
-                value={rate}
-                onChange={(e) => setRate(unit === "rupees" ? rupeesInput(e.target.value) : e.target.value)}
-              />
-              <div className="seg" role="group" aria-label="Interest unit">
-                <button type="button" className={unit === "percent" ? "active" : ""} onClick={() => setUnit("percent")}>
-                  %
-                </button>
-                <button
-                  type="button"
-                  className={unit === "rupees" ? "active" : ""}
-                  onClick={() => {
-                    setUnit("rupees");
-                    setRate(rupeesInput(rate));
-                  }}
-                >
-                  ₹
-                </button>
-              </div>
-            </div>
+          <div>
+            <RateField
+              unit={unit}
+              rate={rate}
+              basis={basis}
+              onUnit={(u) => {
+                setUnit(u);
+                setOwnRate(true);
+              }}
+              onRate={(v) => {
+                setRate(v);
+                setOwnRate(true);
+              }}
+              big
+              required
+            />
+            {ownRate && (unit !== suggestion.unit || num(rate) !== suggestion.rate) ? (
+              <button type="button" className="link small" onClick={applySuggestion}>
+                Use {suggestionText}
+                {suggestion.slab ? ` (loans up to ${inr.format(suggestion.slab.upto)})` : " (default)"}
+              </button>
+            ) : (
+              suggestion.slab && <small className="muted">From settings: loans up to {inr.format(suggestion.slab.upto)}</small>
+            )}
           </div>
           <div className="field">
             <label>Rate is per</label>
@@ -250,8 +277,10 @@ export function NewPledge({
         </details>
         {Number.isFinite(monthly) && monthly > 0 && amount > 0 && (
           <div className="hint-strip">
-            Interest <b>{inr.format(monthly)}</b> per month on {inr.format(amount)}
-            {unit === "rupees" && <> (= {Number(((perPeriod / amount) * 100).toFixed(3))}% per {period === "monthly" ? "month" : "year"})</>}
+            Interest <b>{inr.format(Math.round(monthly))}</b> per month on {inr.format(amount)}
+            {unit === "rupees" && basis > 0 && <> ({rateText(unit, rateN, basis)} = {Number(percent.toFixed(3))}% per {period === "monthly" ? "month" : "year"})</>}
+            {unit === "rupees" && basis === 0 && <> (= {Number(percent.toFixed(3))}% per {period === "monthly" ? "month" : "year"})</>}
+            {unit === "percent" && basis > 0 && <> (= {rateText("rupees", Number(((rateN * basis) / 100).toFixed(2)), basis)})</>}
           </div>
         )}
       </section>

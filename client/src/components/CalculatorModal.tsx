@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
-import { api, type CalcResult, type InterestType, type Policy, type RatePeriod, type RateUnit } from "../api";
-import { POLICY_LABEL, errMsg, formatDate, inr, num, todayYmd } from "../format";
+import { api, type CalcResult, type InterestType, type Policy, type RatePeriod, type RateUnit, type RupeeBasis, type ShopSettings } from "../api";
+import { POLICY_LABEL, errMsg, formatDate, inr, num, ratePercent, todayYmd } from "../format";
 import { Modal } from "./Modal";
+import { RateField } from "./RateField";
 
 export type CalcPrefill = {
   principal: number;
   rate: number;
   unit: RateUnit;
+  basis: RupeeBasis;
   period: RatePeriod;
   type: InterestType;
   start: string;
@@ -16,20 +18,21 @@ export type CalcPrefill = {
 
 export function CalculatorModal({
   prefill,
-  defaultPolicy,
+  settings,
   onClose,
 }: {
   prefill?: CalcPrefill | null;
-  defaultPolicy: Policy;
+  settings: ShopSettings;
   onClose: () => void;
 }) {
+  const basis = prefill?.basis ?? settings.rupee_basis;
   const [tab, setTab] = useState<"interest" | "dates">("interest");
   const [principal, setPrincipal] = useState(prefill ? String(prefill.principal) : "10000");
-  const [rate, setRate] = useState(prefill ? String(prefill.rate) : "2");
-  const [unit, setUnit] = useState<RateUnit>(prefill?.unit ?? "percent");
-  const [period, setPeriod] = useState<RatePeriod>(prefill?.period ?? "monthly");
-  const [type, setType] = useState<InterestType>(prefill?.type ?? "simple");
-  const [policy, setPolicy] = useState<Policy>(prefill?.policy ?? defaultPolicy);
+  const [rate, setRate] = useState(String(prefill?.rate ?? settings.default_rate));
+  const [unit, setUnit] = useState<RateUnit>(prefill?.unit ?? settings.default_rate_unit);
+  const [period, setPeriod] = useState<RatePeriod>(prefill?.period ?? settings.default_rate_period);
+  const [type, setType] = useState<InterestType>(prefill?.type ?? settings.default_interest_type);
+  const [policy, setPolicy] = useState<Policy>(prefill?.policy ?? settings.partial_month_policy);
   const [start, setStart] = useState(prefill?.start ?? todayYmd());
   const [end, setEnd] = useState(todayYmd());
   const [out, setOut] = useState<CalcResult | null>(null);
@@ -48,12 +51,12 @@ export function CalculatorModal({
       setError("Enter amount, interest and both dates.");
       return;
     }
-    if (unit === "rupees" && !(p > 0)) {
+    if (unit === "rupees" && basis === 0 && !(p > 0)) {
       setOut(null);
       setError("Enter the loan amount.");
       return;
     }
-    const r = unit === "rupees" ? (entered / p) * 100 : entered;
+    const r = ratePercent(unit, entered, basis, p);
     if (r > 100) {
       setOut(null);
       setError("Interest is more than the loan amount per period. Please check it.");
@@ -77,7 +80,7 @@ export function CalculatorModal({
         });
     }, 250);
     return () => window.clearTimeout(t);
-  }, [principal, rate, unit, period, type, start, end, policy]);
+  }, [principal, rate, unit, basis, period, type, start, end, policy]);
 
   useEffect(() => {
     if (!dStart || !dEnd) return;
@@ -108,20 +111,7 @@ export function CalculatorModal({
               <label>Loan amount (₹)</label>
               <input inputMode="decimal" value={principal} onChange={(e) => setPrincipal(e.target.value)} />
             </div>
-            <div className="field">
-              <label>Interest {unit === "percent" ? "rate (%)" : "amount (₹)"}</label>
-              <div className="input-unit">
-                <input inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
-                <div className="seg" role="group" aria-label="Interest unit">
-                  <button type="button" className={unit === "percent" ? "active" : ""} onClick={() => setUnit("percent")}>
-                    %
-                  </button>
-                  <button type="button" className={unit === "rupees" ? "active" : ""} onClick={() => setUnit("rupees")}>
-                    ₹
-                  </button>
-                </div>
-              </div>
-            </div>
+            <RateField unit={unit} rate={rate} basis={basis} onUnit={setUnit} onRate={setRate} />
             <div className="field">
               <label>Rate is per</label>
               <select value={period} onChange={(e) => setPeriod(e.target.value as RatePeriod)}>

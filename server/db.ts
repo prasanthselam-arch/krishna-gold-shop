@@ -134,6 +134,10 @@ function migrate() {
     db.exec("ALTER TABLE pledges ADD COLUMN rate_unit TEXT NOT NULL DEFAULT 'percent'");
     db.exec("ALTER TABLE pledges ADD COLUMN rate_amount REAL");
   }
+  // ₹ interest is per this many rupees of loan; 0 = a fixed amount on the whole loan (older registrations).
+  if (!columnExists("pledges", "rate_basis")) {
+    db.exec("ALTER TABLE pledges ADD COLUMN rate_basis INTEGER NOT NULL DEFAULT 0");
+  }
   if (!columnExists("payments", "interest_adjustment")) {
     db.exec("ALTER TABLE payments ADD COLUMN interest_adjustment REAL NOT NULL DEFAULT 0");
   }
@@ -160,6 +164,12 @@ function seed() {
   const defaults: Record<string, string> = {
     shop_name: "KRISHNA GOLD SHOP",
     partial_month_policy: process.env.PARTIAL_MONTH_POLICY || "actual_days",
+    rupee_basis: "100",
+    rate_slabs: "[]",
+    default_rate: "2",
+    default_rate_unit: "percent",
+    default_rate_period: "monthly",
+    default_interest_type: "simple",
     timezone: "Asia/Kolkata",
     currency: "INR",
     jwt_secret: crypto.randomBytes(48).toString("hex"),
