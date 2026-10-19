@@ -82,7 +82,14 @@ Browsers only allow the camera on `http://localhost` or on `https://`. On first 
 `run.sh` creates a self-signed certificate and the server also listens on
 `https://<this-computer-ip>:8443` (see `./run.sh status`). Open that address on the phone,
 accept the "not secure / advanced → proceed" warning once, and the camera works for photos
-and QR scanning. Without HTTPS, **Take photo of QR** still opens the phone camera app.
+and QR scanning. When the scanner is opened over plain `http://` it shows an
+**Open secure page** button that goes to the right address.
+
+Without the live camera, **Take photo** (phone camera app) or **Upload photo** (gallery or
+file) still work: the photo is searched at several sizes and positions, so the QR code
+does not need to fill the picture. Phones with a built-in QR detector (Android Chrome,
+Safari) use it automatically. If several cameras exist, pick one in the scanner; phones
+with a flash get a **Light on** button.
 
 ## Interest rules
 

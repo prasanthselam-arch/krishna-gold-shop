@@ -306,7 +306,13 @@ table.bill-items { width: 100%; border-collapse: collapse; margin-top: 0.6mm; fo
 .input-unit input { flex: 1; min-width: 0; }
 .input-unit .seg button { padding: 0 14px; font-size: 1.05rem; }
 .scan-box { position: absolute; inset: 50% auto auto 50%; width: min(60%, 260px); aspect-ratio: 1; transform: translate(-50%, -50%); border: 3px solid #f6e05e; border-radius: 14px; box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.35); pointer-events: none; }
-.scan-frame { overflow: hidden; border-radius: 10px; }
+.scan-frame { overflow: hidden; border-radius: 10px; background: #000; min-height: 200px; }
+.scan-frame[hidden] { display: none; }
+.scan-status { position: absolute; inset: 0; display: grid; place-items: center; color: #fff; font-weight: 600; }
+.scan-tools { display: flex; gap: 8px; flex-wrap: wrap; justify-content: center; margin-top: 8px; }
+.scan-tools select { max-width: 100%; }
+.notice .btn { margin: 8px 0 4px; display: inline-block; text-decoration: none; }
+.notice p { margin: 0 0 4px; }
 
 /* ---------- responsive: wide screens, tablets, phones (portrait + landscape) ---------- */
 @media (min-width: 1600px) {

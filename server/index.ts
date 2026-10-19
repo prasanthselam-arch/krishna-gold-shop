@@ -155,8 +155,11 @@ const pledgeSchema = z.object({
   ),
 });
 
+/** Set once the HTTPS server is listening; the web app links to it for the camera. */
+let httpsListeningPort = 0;
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, shop: SHOP() });
+  res.json({ ok: true, shop: SHOP(), httpsPort: httpsListeningPort || null });
 });
 
 app.post("/api/login", (req, res) => {
@@ -1047,6 +1050,9 @@ const keyFile = process.env.HTTPS_KEY || path.join(dataDir, "certs", "key.pem");
 if (HTTPS_PORT > 0 && fs.existsSync(certFile) && fs.existsSync(keyFile)) {
   https
     .createServer({ cert: fs.readFileSync(certFile), key: fs.readFileSync(keyFile) }, app)
-    .listen(HTTPS_PORT, () => console.log(`Krishna Gold Shop HTTPS https://localhost:${HTTPS_PORT}`))
+    .listen(HTTPS_PORT, () => {
+      httpsListeningPort = HTTPS_PORT;
+      console.log(`Krishna Gold Shop HTTPS https://localhost:${HTTPS_PORT}`);
+    })
     .on("error", (err) => console.error(`HTTPS not started: ${err.message}`));
 }
