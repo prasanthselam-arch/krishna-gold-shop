@@ -3,6 +3,18 @@
 Gold loan (pledge) desk for Krishna Gold Shop: register pledges with customer and jewellery
 photos, print ID-card size bills with a barcode, take payments, and return gold after OTP check.
 
+## Setup on a new computer
+
+```bash
+./run.sh check          # what is missing (system tools from requirements.txt + npm packages)
+./run.sh setup          # install everything missing (--dry-run to preview)
+```
+
+`./run.sh start` also does this automatically. Node.js is installed with nvm (no sudo);
+other tools use the system package manager (apt, dnf, yum, pacman, zypper or brew) and may
+ask for your password. JavaScript packages are reinstalled automatically when
+`package-lock.json` or the Node.js version changes.
+
 ## Run
 
 The server runs in the background, so the terminal stays free.

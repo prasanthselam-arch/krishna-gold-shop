@@ -1,0 +1,22 @@
+# System requirements for Krishna Gold Shop.
+#   ./run.sh check   report what is missing
+#   ./run.sh setup   install what is missing (also runs automatically on ./run.sh start)
+#
+# Format:  <command>  <minimum version, or ->  <installers...>  # note
+#   nvm:<major>              install Node.js with nvm into your home folder (no sudo)
+#   apt: dnf: yum: pacman: zypper: brew:   system package name for that package manager
+#   A "?" before the command marks it optional: only installed if the database
+#   module has to be compiled on this machine (no ready-made binary available).
+#
+# JavaScript libraries are not listed here; they come from package.json / package-lock.json
+# and are installed automatically with "npm ci".
+
+node      20.0.0  nvm:22                                                                  # JavaScript runtime
+npm       9.0.0   nvm:22                                                                  # comes with Node.js
+curl      7.0     apt:curl dnf:curl yum:curl pacman:curl zypper:curl brew:curl            # health checks, downloads
+ss        -       apt:iproute2 dnf:iproute yum:iproute pacman:iproute2 zypper:iproute2    # port checks
+setsid    -       apt:util-linux dnf:util-linux yum:util-linux pacman:util-linux zypper:util-linux brew:util-linux  # background server
+
+?python3  3.6     apt:python3 dnf:python3 yum:python3 pacman:python zypper:python3 brew:python  # compile better-sqlite3
+?make     -       apt:make dnf:make yum:make pacman:make zypper:make brew:make                  # compile better-sqlite3
+?g++      -       apt:g++ dnf:gcc-c++ yum:gcc-c++ pacman:gcc zypper:gcc-c++                      # compile better-sqlite3

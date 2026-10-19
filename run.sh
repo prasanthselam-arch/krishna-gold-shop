@@ -9,6 +9,8 @@
 #   ./run.sh logs           show the last 100 log lines (logs -f to follow, Ctrl+C to exit)
 #   ./run.sh build          rebuild the web app
 #   ./run.sh backup         take a database backup now
+#   ./run.sh check          check required software (requirements.txt)
+#   ./run.sh setup          install missing software and packages (--dry-run to preview)
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -28,6 +30,10 @@ ok()   { echo "${G}✔${N} $*"; }
 warn() { echo "${Y}!${N} $*"; }
 die()  { echo "${R}✖${N} $*" >&2; exit 1; }
 
+# shellcheck source=scripts/requirements.sh
+. scripts/requirements.sh
+load_nvm
+
 env_value() {
   [ -f .env ] && sed -n "s/^$1=//p" .env | tail -1 | tr -d '\r"' || true
 }
@@ -44,10 +50,7 @@ port_busy()  { ss -ltnH "sport = :$1" 2>/dev/null | grep -q .; }
 app_url()    { [ "$(mode)" = dev ] && echo "http://localhost:$UI_PORT" || echo "http://localhost:$PORT"; }
 
 prepare() {
-  if [ ! -d node_modules ]; then
-    echo "Installing packages (first time only)…"
-    npm install --no-audit --no-fund
-  fi
+  ensure_requirements auto
   if [ ! -f .env ]; then
     cp .env.example .env
     warn "Created .env from .env.example. Review it before going live."
@@ -188,7 +191,7 @@ backup() {
 }
 
 usage() {
-  sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,13p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 case "${1:-help}" in
@@ -199,6 +202,8 @@ case "${1:-help}" in
   logs)    logs "${2:-}" ;;
   build)   prepare; build; is_running && [ "$(mode)" = prod ] && warn "Run ./run.sh restart to use the new build." || true ;;
   backup)  backup ;;
+  check)   ensure_requirements check ;;
+  setup)   [ "${2:-}" = "--dry-run" ] && DRY_RUN=1; ensure_requirements install; [ "$DRY_RUN" = 1 ] || { [ -f .env ] || cp .env.example .env; } ;;
   help|-h|--help) usage ;;
   *) usage; exit 1 ;;
 esac

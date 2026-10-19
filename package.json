@@ -4,6 +4,9 @@
   "private": true,
   "description": "Krishna Gold Shop — single window pledge management",
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -n api,ui -c yellow,cyan \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "tsx watch server/index.ts",
